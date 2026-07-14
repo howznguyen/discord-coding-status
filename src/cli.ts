@@ -1468,6 +1468,50 @@ function copyPathIfExists(source: string, target: string): void {
   });
 }
 
+function readRuntimeDependencyNames(packageRoot: string): string[] {
+  const packageFile = path.join(packageRoot, 'package.json');
+  const manifest = JSON.parse(fs.readFileSync(packageFile, 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
+  return Object.keys(manifest.dependencies || {}).sort();
+}
+
+function missingRuntimeDependencies(runtimeRoot: string, dependencies: string[]): string[] {
+  return dependencies.filter((dependency) => !fs.existsSync(
+    path.join(runtimeRoot, 'node_modules', dependency, 'package.json')
+  ));
+}
+
+function installRuntimeDependencies(runtimeRoot: string): void {
+  const npmArgs = [
+    'install',
+    '--omit=dev',
+    '--no-audit',
+    '--no-fund',
+    '--loglevel=error'
+  ];
+  const npmExecPath = String(process.env.npm_execpath || '').trim();
+  const useNpmExecPath = Boolean(npmExecPath && fs.existsSync(npmExecPath));
+  const command = useNpmExecPath
+    ? process.execPath
+    : (process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'npm');
+  const args = useNpmExecPath
+    ? [npmExecPath, ...npmArgs]
+    : (process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs);
+
+  try {
+    execFileSync(command, args, {
+      cwd: runtimeRoot,
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+  } catch (error) {
+    const stderr = error && typeof error === 'object' && 'stderr' in error
+      ? String((error as { stderr?: Buffer | string }).stderr || '').trim()
+      : '';
+    throw new Error(`Failed to install runtime dependencies${stderr ? `: ${stderr}` : '.'}`);
+  }
+}
+
 function copyRuntimeToInstallDir(): string {
   const packageRoot = getPackageRoot();
   const builtScript = getRuntimeScriptPath(packageRoot);
@@ -1480,15 +1524,30 @@ function copyRuntimeToInstallDir(): string {
   fs.rmSync(tempDir, { recursive: true, force: true });
   fs.mkdirSync(tempDir, { recursive: true });
 
-  copyPathIfExists(path.join(packageRoot, 'dist'), path.join(tempDir, 'dist'));
-  copyPathIfExists(path.join(packageRoot, 'node_modules'), path.join(tempDir, 'node_modules'));
-  copyPathIfExists(path.join(packageRoot, 'package.json'), path.join(tempDir, 'package.json'));
-  copyPathIfExists(path.join(packageRoot, 'README.md'), path.join(tempDir, 'README.md'));
-  copyPathIfExists(path.join(packageRoot, 'LICENSE'), path.join(tempDir, 'LICENSE'));
+  try {
+    copyPathIfExists(path.join(packageRoot, 'dist'), path.join(tempDir, 'dist'));
+    copyPathIfExists(path.join(packageRoot, 'node_modules'), path.join(tempDir, 'node_modules'));
+    copyPathIfExists(path.join(packageRoot, 'package.json'), path.join(tempDir, 'package.json'));
+    copyPathIfExists(path.join(packageRoot, 'README.md'), path.join(tempDir, 'README.md'));
+    copyPathIfExists(path.join(packageRoot, 'LICENSE'), path.join(tempDir, 'LICENSE'));
 
-  fs.rmSync(installDir, { recursive: true, force: true });
-  fs.renameSync(tempDir, installDir);
-  return getRuntimeScriptPath(installDir);
+    const runtimeDependencies = readRuntimeDependencyNames(tempDir);
+    let missingDependencies = missingRuntimeDependencies(tempDir, runtimeDependencies);
+    if (missingDependencies.length > 0) {
+      installRuntimeDependencies(tempDir);
+      missingDependencies = missingRuntimeDependencies(tempDir, runtimeDependencies);
+    }
+    if (missingDependencies.length > 0) {
+      throw new Error(`Missing runtime dependencies: ${missingDependencies.join(', ')}`);
+    }
+
+    fs.rmSync(installDir, { recursive: true, force: true });
+    fs.renameSync(tempDir, installDir);
+    return getRuntimeScriptPath(installDir);
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function readSetupConfigEntries(): Record<string, string> {
