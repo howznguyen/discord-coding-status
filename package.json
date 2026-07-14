@@ -23,7 +23,7 @@
     "status": "node dist/cli.js status",
     "uninstall": "node dist/cli.js uninstall",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test --test-concurrency=1 test/*.test.js",
+    "test": "npm run build && node scripts/run-tests.js",
     "test:integration": "npm run build && node --test --test-concurrency=1 test/hook-discord.integration.test.js",
     "test:stress": "npm run build && node --test --test-concurrency=1 test/hook-state.stress.test.js",
     "hook": "node dist/cli.js hook",
