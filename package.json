@@ -52,7 +52,7 @@
   "homepage": "https://github.com/howznguyen/discord-coding-status#readme",
   "license": "MIT",
   "dependencies": {
-    "chalk": "^4.1.2",
+    "chalk": "^5.6.2",
     "discord-rpc": "^4.0.1"
   },
   "devDependencies": {
