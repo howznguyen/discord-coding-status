@@ -4,7 +4,7 @@
   "description": "Local Discord Rich Presence daemon for Claude Code and Codex.",
   "main": "dist/cli.js",
   "bin": {
-    "discord-coding-status": "./dist/cli.js"
+    "discord-coding-status": "dist/cli.js"
   },
   "type": "commonjs",
   "files": [
