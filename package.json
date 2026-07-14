@@ -1,0 +1,65 @@
+{
+  "name": "discord-coding-status",
+  "version": "1.0.0",
+  "description": "Local Discord Rich Presence daemon for Claude Code and Codex.",
+  "main": "dist/cli.js",
+  "bin": {
+    "discord-coding-status": "./dist/cli.js"
+  },
+  "type": "commonjs",
+  "files": [
+    "dist/",
+    "README.md",
+    "assets/cover.png",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc && node scripts/make-bin.js",
+    "prepack": "npm run build",
+    "start": "node dist/cli.js daemon",
+    "setup": "node dist/cli.js setup",
+    "config": "node dist/cli.js config",
+    "status": "node dist/cli.js status",
+    "uninstall": "node dist/cli.js uninstall",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.js",
+    "test:integration": "npm run build && node --test --test-concurrency=1 test/hook-discord.integration.test.js",
+    "test:stress": "npm run build && node --test --test-concurrency=1 test/hook-state.stress.test.js",
+    "hook": "node dist/cli.js hook",
+    "codex-hook": "node dist/cli.js codex-hook",
+    "state": "node dist/cli.js state",
+    "clear": "node dist/cli.js clear",
+    "detect": "node dist/cli.js status"
+  },
+  "keywords": [
+    "discord",
+    "rich-presence",
+    "claude-code",
+    "codex",
+    "ai-coding",
+    "startup",
+    "launchagent",
+    "scheduled-task"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/howznguyen/discord-coding-status.git"
+  },
+  "bugs": {
+    "url": "https://github.com/howznguyen/discord-coding-status/issues"
+  },
+  "homepage": "https://github.com/howznguyen/discord-coding-status#readme",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "discord-rpc": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

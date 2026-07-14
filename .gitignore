@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+
+node_modules/
+bun.lockb
+
+states.json
+states.json.lock
+states.json.*.tmp
+
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Knowns runtime state is local (search index, logs, task timers, and memories).
+.knowns/

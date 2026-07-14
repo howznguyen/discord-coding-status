@@ -1,0 +1,27 @@
+name: Feature Request
+description: Suggest an improvement or supported AI tool integration.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: What workflow should this improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the behavior you want.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy Impact
+      description: What local data would be read, transformed, or sent to Discord?
+    validations:
+      required: true
