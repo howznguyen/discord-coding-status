@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
+const { version: EXPECTED_VERSION } = require('../package.json');
 
 const ROOT = path.resolve(__dirname, '..');
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -86,5 +87,5 @@ test('setup from a packed npm install creates a self-contained runtime', {
     env,
     encoding: 'utf8'
   }).trim();
-  assert.equal(version, '1.0.1');
+  assert.equal(version, EXPECTED_VERSION);
 });

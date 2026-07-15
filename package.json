@@ -1,6 +1,6 @@
 {
   "name": "discord-coding-status",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Local Discord Rich Presence daemon for Claude Code and Codex.",
   "author": "howznguyen",
   "main": "dist/cli.js",

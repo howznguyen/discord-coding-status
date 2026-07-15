@@ -6,6 +6,13 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-15
+
+- Added active Codex model and reasoning-effort metadata to Discord Rich Presence.
+- Preserved the last successful quota value while temporary OAuth or RPC refreshes are unavailable.
+- Made bare `npx -y discord-coding-status@latest` invocations show project information and usage instead of starting the daemon.
+- Added npm and project badges, official project metadata, and documented the `@latest` update workflow.
+
 ## [1.0.1] - 2026-07-15
 
 - Fixed `npx ... setup` installs so the copied daemon runtime owns its production dependencies instead of depending on npm's temporary hoisted layout.
