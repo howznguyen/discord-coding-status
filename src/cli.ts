@@ -939,8 +939,7 @@ function getArgString(args: Record<string, string | boolean>, name: string): str
 
 function readOptionalStdin(): string {
   try {
-    const stat = fs.fstatSync(0);
-    if (stat.isFIFO() || stat.isFile() || stat.isSocket()) {
+    if (!process.stdin.isTTY) {
       return fs.readFileSync(0, 'utf8');
     }
   } catch (_) {
