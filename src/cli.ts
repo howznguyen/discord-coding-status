@@ -3926,11 +3926,16 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
     }
   }
 
+  const nextText = text || cachedUsage?.text || null;
   cachedUsageTextByKey.set(cacheKey, {
-    text,
+    text: nextText,
     fetchedAt: Date.now()
   });
-  debugLog(`Usage refresh completed for ${cacheKey}: ${text || 'unavailable'}.`);
+  debugLog(
+    text
+      ? `Usage refresh completed for ${cacheKey}: ${text}.`
+      : `Usage refresh unavailable for ${cacheKey}; retaining ${nextText || 'no cached value'}.`
+  );
 }
 
 async function getPresenceMetadata(tool: ActiveTool): Promise<PresenceMetadata> {

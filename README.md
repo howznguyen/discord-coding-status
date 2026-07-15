@@ -221,7 +221,7 @@ Check the current value directly:
 npx discord-coding-status quota --source oauth
 ```
 
-Quota refreshes run in the background. A slow or unavailable endpoint cannot block a hook activity update from reaching Discord; the presence updates again when fresh quota arrives.
+Quota refreshes run in the background. A slow or unavailable endpoint cannot block a hook activity update from reaching Discord. After the first successful refresh, the daemon keeps showing the last known quota value during temporary failures and replaces it only when fresh quota arrives.
 
 OAuth access and refresh tokens are read from your local Codex auth file. They are used only with the relevant OpenAI authentication/usage endpoints and are never included in Discord Rich Presence.
 

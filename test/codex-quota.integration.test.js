@@ -15,6 +15,8 @@ const {
 
 async function startUsageServer(t, responseDelayMs = 0) {
   const requests = [];
+  let responseStatus = 200;
+  let usedPercent = 45;
   const server = http.createServer((request, response) => {
     requests.push({
       authorization: request.headers.authorization,
@@ -23,12 +25,12 @@ async function startUsageServer(t, responseDelayMs = 0) {
     });
 
     setTimeout(() => {
-      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.writeHead(responseStatus, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({
         plan_type: 'pro',
         rate_limit: {
           primary_window: {
-            used_percent: 45,
+            used_percent: usedPercent,
             limit_window_seconds: 604800
           },
           secondary_window: null
@@ -51,7 +53,11 @@ async function startUsageServer(t, responseDelayMs = 0) {
   assert.ok(address && typeof address === 'object');
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    requests
+    requests,
+    respondWith(status, nextUsedPercent = usedPercent) {
+      responseStatus = status;
+      usedPercent = nextUsedPercent;
+    }
   };
 }
 
@@ -132,4 +138,67 @@ test('a slow OAuth quota request does not block a hook update to Discord', async
   assert.equal(quotaActivity.clientId, '1517375602662051900');
   assert.equal(usageServer.requests.length, 1);
   assert.equal(daemon.output().stderr, '');
+});
+
+test('quota refresh keeps the last successful value while the usage endpoint is unavailable', async (t) => {
+  const { directory, env, rpcLogFile } = createTestEnvironment(t);
+  const usageServer = await startUsageServer(t);
+  const authFile = writeTestAuth(directory);
+  const daemonEnv = {
+    ...env,
+    DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE: 'oauth',
+    DISCORD_CODING_STATUS_CODEX_AUTH_FILE: authFile,
+    DISCORD_CODING_STATUS_CODEX_API_BASE_URL: usageServer.baseUrl,
+    DISCORD_CODING_STATUS_POLL_INTERVAL_MS: '50',
+    DISCORD_CODING_STATUS_USAGE_REFRESH_INTERVAL_MS: '100'
+  };
+  const daemon = startDaemon(t, daemonEnv);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  const commonArgs = [
+    'hook',
+    '--tool', 'codex',
+    '--surface', 'cli',
+    '--status', 'running',
+    '--session-id', 'quota-cache-session',
+    '--cwd', process.cwd()
+  ];
+  await runCli([...commonArgs, '--activity', 'Quota cache initial'], daemonEnv);
+
+  await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.activity.state === 'Pro • weekly 55%'
+    ),
+    'the first successful quota value to reach Discord'
+  );
+
+  usageServer.respondWith(503);
+  await waitFor(
+    () => usageServer.requests.length >= 2,
+    'a failed quota refresh attempt'
+  );
+
+  await runCli([...commonArgs, '--activity', 'Quota cache during outage'], daemonEnv);
+  const cachedActivity = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.activity.details.includes('Quota cache during outage')
+    ),
+    'the cached quota value to remain visible during the outage'
+  );
+  assert.equal(cachedActivity.activity.state, 'Pro • weekly 55%');
+
+  usageServer.respondWith(200, 60);
+  await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.activity.state === 'Pro • weekly 40%'
+    ),
+    'the recovered quota value to replace the cached value'
+  );
 });
