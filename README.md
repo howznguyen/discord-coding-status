@@ -244,6 +244,8 @@ The installer merges hooks into `~/.codex/hooks.json` for:
 - `PostToolUse`
 - `Stop`
 
+Native Codex hooks provide the active model. The daemon also reads the latest local `turn_context` entry referenced by the hook transcript to capture reasoning effort, so Rich Presence can show values such as `gpt-5.6-sol · xhigh`. Transcript prompts and responses are not included in Discord activity.
+
 Existing hook configuration is preserved, and the previous file is backed up as `hooks.json.bak` before a change is written.
 
 ### Generic hook input

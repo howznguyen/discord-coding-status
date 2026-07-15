@@ -34,12 +34,12 @@ function createTestEnvironment(t, overrides = {}) {
   return { directory, env, rpcLogFile, stateFile };
 }
 
-function runCli(args, env, timeoutMs = 15000) {
+function runCli(args, env, timeoutMs = 15000, input = null) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: ROOT,
       env,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe']
     });
     let stdout = '';
     let stderr = '';
@@ -69,6 +69,10 @@ function runCli(args, env, timeoutMs = 15000) {
         `CLI failed (${code ?? signal}): ${args.join(' ')}\n${stdout}\n${stderr}`
       ));
     });
+
+    if (input !== null) {
+      child.stdin.end(input);
+    }
   });
 }
 

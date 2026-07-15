@@ -38,6 +38,7 @@ interface ActiveTool extends ToolDefinition {
   status?: string | null;
   activity?: string | null;
   model?: string | null;
+  effort?: string | null;
   contextText?: string | null;
   projectName?: string | null;
   packageName?: string | null;
@@ -82,6 +83,7 @@ interface HookSessionState {
   title?: string;
   activity?: string;
   model?: string;
+  effort?: string;
   context?: string;
 }
 
@@ -934,7 +936,7 @@ function getArgString(args: Record<string, string | boolean>, name: string): str
 function readOptionalStdin(): string {
   try {
     const stat = fs.fstatSync(0);
-    if (stat.isFIFO() || stat.isFile()) {
+    if (stat.isFIFO() || stat.isFile() || stat.isSocket()) {
       return fs.readFileSync(0, 'utf8');
     }
   } catch (_) {
@@ -979,6 +981,77 @@ function findStringDeep(value: unknown, keys: string[], depth = 0): string | nul
   }
 
   return null;
+}
+
+function readCodexTurnMetadata(transcriptPath: string | null): { model: string | null; effort: string | null } {
+  const unavailable = { model: null, effort: null };
+  if (!transcriptPath) {
+    return unavailable;
+  }
+
+  let fd: number | null = null;
+
+  try {
+    const resolvedPath = path.resolve(resolveHomePath(transcriptPath));
+    const stat = fs.statSync(resolvedPath);
+    const maxBytes = 2 * 1024 * 1024;
+    const length = Math.min(stat.size, maxBytes);
+    const start = Math.max(0, stat.size - length);
+    const buffer = Buffer.alloc(length);
+    fd = fs.openSync(resolvedPath, 'r');
+    fs.readSync(fd, buffer, 0, length, start);
+
+    let text = buffer.toString('utf8');
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n');
+      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+    }
+
+    const lines = text.split('\n');
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index].trim();
+      if (!line) {
+        continue;
+      }
+
+      try {
+        const record = asRecord(JSON.parse(line));
+        if (!record || record.type !== 'turn_context') {
+          continue;
+        }
+
+        const payload = asRecord(record.payload);
+        if (!payload) {
+          continue;
+        }
+
+        return {
+          model: extractString(payload.model),
+          effort: extractString(
+            payload.effort
+              ?? payload.reasoning_effort
+              ?? payload.reasoningEffort
+              ?? payload.model_reasoning_effort
+              ?? payload.modelReasoningEffort
+          )
+        };
+      } catch (_) {
+        // Ignore incomplete or non-JSON transcript lines while scanning backwards.
+      }
+    }
+  } catch (error) {
+    debugLog(`Codex transcript metadata unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (_) {
+        // Best effort cleanup for a local transcript read.
+      }
+    }
+  }
+
+  return unavailable;
 }
 
 function safeCommandSummary(command: string | null): string | null {
@@ -1194,6 +1267,7 @@ function coerceHookSessionState(value: unknown): HookSessionState | null {
     title: typeof input.title === 'string' ? input.title : undefined,
     activity: typeof input.activity === 'string' ? input.activity : undefined,
     model: typeof input.model === 'string' ? input.model : undefined,
+    effort: typeof input.effort === 'string' ? input.effort : undefined,
     context: typeof input.context === 'string' ? input.context : undefined
   };
 }
@@ -1220,12 +1294,18 @@ function sessionFromArgs(args: Record<string, string | boolean>): HookSessionSta
     title: getArgString(args, 'title') || undefined,
     activity: getArgString(args, 'activity') || undefined,
     model: getArgString(args, 'model') || undefined,
+    effort: getArgString(args, 'effort')
+      || getArgString(args, 'reasoning-effort')
+      || getArgString(args, 'model-reasoning-effort')
+      || undefined,
     context: getArgString(args, 'context') || undefined
   });
 }
 
 function codexHookSessionFromArgs(args: Record<string, string | boolean>): HookSessionState {
   const input = readHookInput();
+  const transcriptPath = findStringDeep(input, ['transcript_path', 'transcriptPath']);
+  const turnMetadata = readCodexTurnMetadata(transcriptPath);
   const event = getArgString(args, 'event') || findStringDeep(input, ['event', 'hook_event', 'hookEvent']) || 'unknown';
   const status = getArgString(args, 'status') || statusFromCodexHookEvent(event);
   const cwd = path.resolve(
@@ -1249,7 +1329,15 @@ function codexHookSessionFromArgs(args: Record<string, string | boolean>): HookS
     package: getArgString(args, 'package') || undefined,
     title: getArgString(args, 'title') || undefined,
     activity: getArgString(args, 'activity') || activityFromCodexHook(event, input) || undefined,
-    model: getArgString(args, 'model') || findStringDeep(input, ['model', 'modelName', 'model_name']) || undefined,
+    model: getArgString(args, 'model')
+      || findStringDeep(input, ['model', 'modelName', 'model_name'])
+      || turnMetadata.model
+      || undefined,
+    effort: getArgString(args, 'effort')
+      || getArgString(args, 'reasoning-effort')
+      || findStringDeep(input, ['effort', 'reasoning_effort', 'reasoningEffort', 'model_reasoning_effort', 'modelReasoningEffort'])
+      || turnMetadata.effort
+      || undefined,
     context: getArgString(args, 'context') || findStringDeep(input, ['context', 'context_used', 'contextUsed']) || undefined
   };
 }
@@ -1325,7 +1413,10 @@ function upsertHookState(session: HookSessionState): void {
       }
 
       state.sessions[session.session_id] = {
+        ...reusableSession,
         ...session,
+        model: session.model || reusableSession?.model,
+        effort: session.effort || reusableSession?.effort,
         started_at: startedAt
       };
     }
@@ -3580,6 +3671,7 @@ function toolFromSession(session: HookSessionState): ActiveTool {
       status: session.status,
       activity: session.activity || null,
       model: session.model || null,
+      effort: session.effort || null,
       contextText: session.context || null,
       projectName: session.project || null,
       packageName: session.package || null
@@ -3598,6 +3690,7 @@ function toolFromSession(session: HookSessionState): ActiveTool {
       status: session.status,
       activity: session.activity || null,
       model: session.model || null,
+      effort: session.effort || null,
       contextText: session.context || null,
       projectName: session.project || null,
       packageName: session.package || null
@@ -3615,6 +3708,7 @@ function toolFromSession(session: HookSessionState): ActiveTool {
     status: session.status,
     activity: session.activity || null,
     model: session.model || null,
+    effort: session.effort || null,
     contextText: session.context || null,
     projectName: session.project || null,
     packageName: session.package || null
@@ -3891,6 +3985,17 @@ function projectBranchText(metadata: PresenceMetadata): string | null {
   return metadata.projectName;
 }
 
+function modelTextForPresence(tool: ActiveTool): string | null {
+  const model = String(tool.model || '').replace(/\s+/g, ' ').trim();
+  const effort = String(tool.effort || '').replace(/\s+/g, ' ').trim();
+
+  if (!model) {
+    return null;
+  }
+
+  return truncatePresenceText(effort ? `${model} · ${effort}` : model);
+}
+
 async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveTool | null> {
   if (!tool) {
     return null;
@@ -3898,6 +4003,7 @@ async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveToo
 
   const metadata = await getPresenceMetadata(tool);
   const activityText = activityTextForPresence(tool);
+  const modelText = modelTextForPresence(tool);
   const details = shouldShowProject()
     ? joinPresenceParts([activityText, projectBranchText(metadata)]) || activityText
     : activityText;
@@ -3905,7 +4011,10 @@ async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveToo
     toolFamilyForTool(tool) === 'codex' ? PLAN_TEXT_OVERRIDE || 'Codex quota unavailable' : tool.state,
     metadata.packageName ? `pkg ${metadata.packageName}` : null
   ]);
-  const state = metadata.usageText || fallbackState || tool.state;
+  const state = joinPresenceParts([
+    modelText,
+    metadata.usageText || fallbackState || tool.state
+  ]) || fallbackState || tool.state;
 
   return {
     ...tool,
