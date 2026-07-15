@@ -9,6 +9,8 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/discord-coding-status"><img src="https://img.shields.io/npm/v/discord-coding-status?logo=npm&logoColor=white&color=CB3837" alt="npm version"></a>
+  <a href="https://howznguyen.dev/projects/discord-coding-status"><img src="https://img.shields.io/badge/project-howznguyen.dev-111827" alt="Discord Coding Status project page"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A518-339933?logo=nodedotjs&logoColor=white" alt="Node.js 18 or newer"></a>
   <img src="https://img.shields.io/badge/startup-macOS%20%7C%20Windows-5865f2" alt="Startup support for macOS and Windows">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0ea5e9" alt="MIT License"></a>
@@ -72,10 +74,16 @@ Linux can run the daemon manually, but `setup` and `uninstall` currently manage 
 
 ## Quick start
 
+Run the package without a subcommand to print project information, available commands, paths, and examples. This does not start the daemon:
+
+```sh
+npx -y discord-coding-status@latest
+```
+
 ### 1. Install and start
 
 ```sh
-npx discord-coding-status setup
+npx -y discord-coding-status@latest setup
 ```
 
 Setup performs four actions:
@@ -88,13 +96,13 @@ Setup performs four actions:
 Force hook installation if Codex was not detected:
 
 ```sh
-npx discord-coding-status setup --codex-hooks
+npx -y discord-coding-status@latest setup --codex-hooks
 ```
 
 Skip Codex hooks:
 
 ```sh
-npx discord-coding-status setup --no-codex-hooks
+npx -y discord-coding-status@latest setup --no-codex-hooks
 ```
 
 ### 2. Trust Codex hooks
@@ -116,6 +124,16 @@ npx discord-coding-status quota --source oauth
 ```
 
 Start a Codex or Claude Code session, then submit a prompt or use a tool. Discord should update within moments.
+
+### Updating
+
+Run setup from the latest published package to replace the copied runtime, refresh its production dependencies, reload startup, and update the managed Codex hooks:
+
+```sh
+npx -y discord-coding-status@latest setup --codex-hooks
+```
+
+Existing user configuration and session state are preserved. If the managed hook commands changed, open Codex and run `/hooks` to review and trust them again.
 
 ## What Discord displays
 

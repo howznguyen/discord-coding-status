@@ -149,6 +149,10 @@ interface ConfigEditorField {
 
 const APP_ID = 'discord-coding-status';
 const APP_TITLE = 'Discord Coding Status';
+const APP_AUTHOR = '@howznguyen';
+const APP_WEBSITE = 'https://howznguyen.dev/projects/discord-coding-status';
+const APP_REPOSITORY = 'https://github.com/howznguyen/discord-coding-status';
+const APP_LICENSE = 'MIT';
 const MACOS_LAUNCH_AGENT_ID = 'io.github.discord-coding-status.daemon';
 const WINDOWS_TASK_NAME = 'DiscordCodingStatus';
 const USER_DATA_DIR = path.join(os.homedir(), APP_ID);
@@ -2247,6 +2251,7 @@ function printCodexHooksStatus(): void {
 
 function printHelp(): void {
   console.log(`${title(APP_TITLE)} ${dim(VERSION)}
+${dim('Local Discord Rich Presence for Codex and Claude Code.')}
 
 ${chalk.bold('Usage:')}
   discord-coding-status setup                 Install startup and start the daemon
@@ -2274,12 +2279,19 @@ ${chalk.bold('Config file:')}
 ${chalk.bold('State file:')}
   ${accent(STATE_FILE)}
 
+${chalk.bold('Project:')}
+  Author: ${accent(APP_AUTHOR)}
+  Website: ${accent(APP_WEBSITE)}
+  Repository: ${accent(APP_REPOSITORY)}
+  License: ${accent(APP_LICENSE)}
+
 ${chalk.bold('Examples:')}
-  ${commandText('npx discord-coding-status setup')}
-  ${commandText('npx discord-coding-status config')}
-  ${commandText('npx discord-coding-status setup --codex-hooks')}
-  ${commandText('npx discord-coding-status setup-codex-hooks')}
+  ${commandText('npx -y discord-coding-status@latest')}
+  ${commandText('npx -y discord-coding-status@latest setup')}
+  ${commandText('npx -y discord-coding-status@latest config')}
+  ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
   ${commandText('discord-coding-status status')}
+  ${commandText('discord-coding-status daemon')}
   ${commandText('DISCORD_CODING_STATUS_DETAIL_LEVEL=project discord-coding-status state')}
   ${commandText('discord-coding-status quota --source oauth')}
 `);
@@ -2288,7 +2300,7 @@ ${chalk.bold('Examples:')}
 function runMetaCommand(command: string): boolean {
   const normalized = command.trim().toLowerCase();
 
-  if (['help', '--help', '-h'].includes(normalized)) {
+  if (!normalized || ['help', '--help', '-h'].includes(normalized)) {
     printHelp();
     return true;
   }

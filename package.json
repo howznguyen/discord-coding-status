@@ -2,6 +2,7 @@
   "name": "discord-coding-status",
   "version": "1.0.1",
   "description": "Local Discord Rich Presence daemon for Claude Code and Codex.",
+  "author": "howznguyen",
   "main": "dist/cli.js",
   "bin": {
     "discord-coding-status": "dist/cli.js"
@@ -49,7 +50,7 @@
   "bugs": {
     "url": "https://github.com/howznguyen/discord-coding-status/issues"
   },
-  "homepage": "https://github.com/howznguyen/discord-coding-status#readme",
+  "homepage": "https://howznguyen.dev/projects/discord-coding-status",
   "license": "MIT",
   "dependencies": {
     "chalk": "^4.1.2",
