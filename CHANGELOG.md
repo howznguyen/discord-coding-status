@@ -11,6 +11,7 @@ This project follows semantic versioning once tagged releases begin.
 - Cleaned `dist` before each build so moved modules cannot remain as stale files in published npm packages.
 - Added a capability-driven tool provider registry for process/setup/hook/Discord integration, with built-in Codex and Claude providers plus a tested fake OpenCode extension contract.
 - Added an approval-gated release-candidate workflow that builds a draft artifact before publishing npm and the GitHub Release together.
+- Fixed setup probes so mocked and real platform paths use the target platform's path semantics on every CI host.
 
 ## [1.2.0] - 2026-07-20
 

@@ -139,6 +139,40 @@ test('a new desktop provider uses generic Windows Start Apps discovery', () => {
   }]);
 });
 
+test('setup path probes use target platform path semantics', () => {
+  const provider = {
+    id: 'openCodeHome',
+    family: 'opencode',
+    setup: {
+      name: 'OpenCode config',
+      order: 62,
+      probe: {
+        kind: 'path',
+        defaultPath: '~/.opencode'
+      }
+    }
+  };
+  const expectedPath = 'C:\\Users\\example\\.opencode';
+  const detections = detectSetupTools({
+    platform: 'win32',
+    homeDirectory: 'C:\\Users\\example',
+    pathExists: (candidate) => candidate === expectedPath,
+    executeFile: (command) => {
+      if (command === 'powershell.exe') {
+        return '[]';
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  }, [provider]);
+
+  assert.deepEqual(detections, [{
+    key: 'openCodeHome',
+    name: 'OpenCode config',
+    detected: true,
+    detail: expectedPath
+  }]);
+});
+
 test('provider descriptors enforce macOS bundle identity and required runtime paths', () => {
   const existingPaths = new Set([
     '/Applications/ChatGPT.app',

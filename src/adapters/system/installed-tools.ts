@@ -62,14 +62,23 @@ function detectionRuntime(options: SetupDetectionOptions): DetectionRuntime {
   };
 }
 
-function resolveHomePath(value: string, homeDirectory: string): string {
+function pathForPlatform(platform: NodeJS.Platform): typeof path.posix {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+
+function resolveHomePath(
+  value: string,
+  homeDirectory: string,
+  platform: NodeJS.Platform
+): string {
+  const platformPath = pathForPlatform(platform);
   if (value === '~') {
     return homeDirectory || value;
   }
   if (value.startsWith('~/')) {
-    return path.join(homeDirectory, value.slice(2));
+    return platformPath.join(homeDirectory, value.slice(2));
   }
-  return path.resolve(value);
+  return platformPath.resolve(value);
 }
 
 function findExecutable(command: string, runtime: DetectionRuntime): string | null {
@@ -79,7 +88,7 @@ function findExecutable(command: string, runtime: DetectionRuntime): string | nu
   }
 
   if (trimmed.includes('/') || trimmed.includes('\\')) {
-    const resolved = resolveHomePath(trimmed, runtime.homeDirectory);
+    const resolved = resolveHomePath(trimmed, runtime.homeDirectory, runtime.platform);
     return runtime.pathExists(resolved) ? resolved : null;
   }
 
@@ -116,6 +125,7 @@ function detectWindowsStartApps(runtime: DetectionRuntime): WindowsStartApp[] {
 }
 
 function readMacBundleIdentifier(appPath: string, runtime: DetectionRuntime): string | null {
+  const platformPath = pathForPlatform(runtime.platform);
   try {
     return runtime.executeFile('/usr/bin/plutil', [
       '-extract',
@@ -123,7 +133,7 @@ function readMacBundleIdentifier(appPath: string, runtime: DetectionRuntime): st
       'raw',
       '-o',
       '-',
-      path.join(appPath, 'Contents', 'Info.plist')
+      platformPath.join(appPath, 'Contents', 'Info.plist')
     ]).trim() || null;
   } catch (_) {
     return null;
@@ -134,10 +144,11 @@ function detectMacDesktopApp(
   probe: DesktopInstallationProbe,
   runtime: DetectionRuntime
 ): string | null {
+  const platformPath = pathForPlatform(runtime.platform);
   for (const app of probe.macCandidates) {
     const candidates = [
-      path.join('/Applications', app.bundleName),
-      path.join(runtime.homeDirectory, 'Applications', app.bundleName)
+      platformPath.join('/Applications', app.bundleName),
+      platformPath.join(runtime.homeDirectory, 'Applications', app.bundleName)
     ];
 
     for (const candidate of candidates) {
@@ -148,7 +159,7 @@ function detectMacDesktopApp(
         continue;
       }
       if (app.requiredRelativePaths?.some(
-        (requiredPath) => !runtime.pathExists(path.join(candidate, requiredPath))
+        (requiredPath) => !runtime.pathExists(platformPath.join(candidate, requiredPath))
       )) {
         continue;
       }
@@ -188,7 +199,11 @@ function detectProbe(
 
   if (probe.kind === 'path') {
     const configuredPath = options.pathOverrides?.[provider.id] || probe.defaultPath;
-    const resolvedPath = resolveHomePath(configuredPath, runtime.homeDirectory);
+    const resolvedPath = resolveHomePath(
+      configuredPath,
+      runtime.homeDirectory,
+      runtime.platform
+    );
     return runtime.pathExists(resolvedPath) ? resolvedPath : null;
   }
 
