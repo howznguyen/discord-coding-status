@@ -25,6 +25,8 @@ jobs:
       npm_tag: ${{ steps.release.outputs.npm_tag }}
       package_name: ${{ steps.release.outputs.package_name }}
       package_file: ${{ steps.package.outputs.package_file }}
+      tag_exists: ${{ steps.release.outputs.tag_exists }}
+      published: ${{ steps.release.outputs.published }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,9 +58,19 @@ jobs:
             exit 1
           fi
 
+          tag_exists=false
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "Tag already exists: $tag" >&2
-            exit 1
+            tag_commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+            current_commit="$(git rev-parse HEAD)"
+            current_version="$(node -p "require('./package.json').version")"
+            if [[ "$current_version" != "$version" ]] \
+              || ! git merge-base --is-ancestor "$tag_commit" "$current_commit" \
+              || ! git diff --quiet "$tag_commit" "$current_commit" -- . \
+                ':(exclude).github/workflows/publish.yml'; then
+              echo "Tag already exists but does not match the current release state: $tag" >&2
+              exit 1
+            fi
+            tag_exists=true
           fi
 
           npm version "$version" --no-git-tag-version --allow-same-version
@@ -66,9 +78,13 @@ jobs:
           package_name="$(node -p "require('./package.json').name")"
           published_version="$(npm view "$package_name@$version" version --json 2>/dev/null || true)"
           published_version="$(printf '%s' "$published_version" | tr -d '\"[:space:]')"
+          published=false
           if [[ "$published_version" == "$version" ]]; then
-            echo "$package_name@$version is already published on npm." >&2
-            exit 1
+            if [[ "$tag_exists" != true ]]; then
+              echo "$package_name@$version is already on npm but $tag is missing." >&2
+              exit 1
+            fi
+            published=true
           fi
 
           npm_tag=latest
@@ -80,6 +96,8 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
           echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
 
       - name: Test
         run: npm test
@@ -101,6 +119,7 @@ jobs:
           if-no-files-found: error
 
       - name: Commit version and push tag
+        if: steps.release.outputs.tag_exists != 'true'
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -125,6 +144,16 @@ jobs:
           NPM_TAG: ${{ steps.release.outputs.npm_tag }}
           PACKAGE_FILE: ${{ steps.package.outputs.package_file }}
         run: |
+          release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "$release_draft" == true ]]; then
+            echo "Draft GitHub Release already exists: $RELEASE_TAG"
+            exit 0
+          fi
+          if [[ "$release_draft" == false ]]; then
+            echo "Published GitHub Release already exists: $RELEASE_TAG"
+            exit 0
+          fi
+
           release_args=("$RELEASE_TAG" "$PACKAGE_FILE#npm package candidate" --draft --verify-tag --generate-notes --title "$RELEASE_TAG")
           if [[ "$NPM_TAG" == next ]]; then
             release_args+=(--prerelease --latest=false)
@@ -138,6 +167,11 @@ jobs:
       name: npm-production
       url: https://www.npmjs.com/package/${{ needs.prepare.outputs.package_name }}/v/${{ needs.prepare.outputs.version }}
     steps:
+      - name: Checkout release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
       - name: Download release package
         uses: actions/download-artifact@v4
         with:
@@ -151,6 +185,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Publish to npm
+        if: needs.prepare.outputs.published != 'true'
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -167,7 +202,7 @@ jobs:
           published_version="$(npm view "$PACKAGE_NAME@$VERSION" version --json 2>/dev/null || true)"
           published_version="$(printf '%s' "$published_version" | tr -d '\"[:space:]')"
           if [[ "$published_version" != "$VERSION" ]]; then
-            npm publish "${package_files[0]}" --access public --provenance --tag "$NPM_TAG"
+            npm publish "./${package_files[0]}" --access public --provenance --tag "$NPM_TAG"
           fi
 
       - name: Publish GitHub Release
