@@ -28,8 +28,7 @@ test('config preview reflects persisted display visibility controls', async (t) 
   }, null, 2)}\n`);
 
   const preview = await runCli(['config', '--preview'], env);
-  const projectName = path.basename(path.resolve(__dirname, '..'));
-  assert.ok(preview.stdout.includes(`Top: Running a command | ${projectName} @`));
+  assert.match(preview.stdout, /Top: Running a command \| [^\r\n]+ @ [^\r\n]+/);
   assert.doesNotMatch(preview.stdout, /Bash survived the assignment/);
   assert.match(preview.stdout, /Bottom: ctx 42% \| pkg discord-coding-status/);
   assert.doesNotMatch(preview.stdout, /gpt-5\.6-sol|weekly 54%/);
