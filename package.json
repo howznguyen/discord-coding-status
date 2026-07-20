@@ -29,6 +29,7 @@
     "test:stress": "npm run build && node --test --test-concurrency=1 test/hook-state.stress.test.js",
     "hook": "node dist/cli.js hook",
     "codex-hook": "node dist/cli.js codex-hook",
+    "claude-hook": "node dist/cli.js claude-hook",
     "state": "node dist/cli.js state",
     "clear": "node dist/cli.js clear",
     "detect": "node dist/cli.js status"

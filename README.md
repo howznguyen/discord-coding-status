@@ -25,17 +25,17 @@
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
 
-Discord Coding Status is a small local daemon that keeps your Discord activity in sync with your AI coding sessions. It combines lifecycle hooks with process detection, enriches activity with sanitized project metadata and optional Codex quota, then publishes it through Discord Desktop's local RPC connection.
+Discord Coding Status is a small local daemon that keeps your Discord activity in sync with your AI coding sessions. It combines lifecycle hooks with process detection, enriches activity with sanitized project metadata, active-model metadata, and optional native quota, then publishes it through Discord Desktop's local RPC connection.
 
 > [!NOTE]
 > This is not a Discord bot or webhook. It does not need a bot token, public server, or cloud relay. Discord Desktop must be running on the same computer.
 
 ## Why use it?
 
-- **Real-time updates** - Codex hook changes reach Discord immediately; polling remains as a fallback.
+- **Real-time updates** - Codex and Claude Code hook changes reach Discord immediately; polling remains as a fallback.
 - **Codex and Claude Code** - separate Discord application identities are built in for both tools.
 - **Useful context** - show activity, sanitized repository name, branch, package, and quota according to your privacy level.
-- **Quota aware** - read the Codex plan and active usage windows from OAuth or Codex app-server RPC.
+- **Quota aware** - read Codex quota from OAuth/app-server RPC and Claude subscription quota from Claude Code OAuth.
 - **Local-first** - session state stays on your machine and Rich Presence uses Discord's local IPC/RPC transport.
 - **Starts with your session** - installs a LaunchAgent on macOS or a Scheduled Task on Windows.
 - **Tested without Discord** - integration and stress tests use a deterministic local RPC transport.
@@ -45,9 +45,11 @@ Discord Coding Status is a small local daemon that keeps your Discord activity i
 ```mermaid
 flowchart LR
     H["Codex lifecycle hooks"] --> D["Local daemon"]
+    C["Claude lifecycle hooks"] --> D
     P["Process detection"] --> D
     D --> S["Sanitize and enrich activity"]
     Q["Codex quota source"] -. optional .-> S
+    CQ["Claude subscription OAuth"] -. eligible sessions only .-> S
     S --> R["Discord Desktop RPC"]
 ```
 
@@ -59,7 +61,7 @@ The state file is watched for immediate changes. A 10-second process/polling loo
 | --- | --- | --- | --- |
 | Codex CLI | Lifecycle hooks + process fallback | OAuth or app-server RPC | Codex |
 | Codex App | Process detection | OAuth or app-server RPC | Codex |
-| Claude Code | Process detection + generic hook input | - | Claude Code |
+| Claude Code | Lifecycle hooks + process fallback | Subscription OAuth | Claude Code |
 
 If Codex and Claude Code are active together, the daemon updates both RPC clients. Discord Desktop decides which activities are visible in its interface.
 
@@ -91,18 +93,20 @@ Setup performs four actions:
 1. Detects local Codex and Claude Code installations.
 2. Copies a self-contained runtime into your user application-data directory.
 3. Installs and starts a macOS LaunchAgent or Windows Scheduled Task.
-4. Installs Codex lifecycle hooks automatically when Codex is detected.
+4. Installs managed Codex and Claude lifecycle hooks automatically when each tool is detected.
 
-Force hook installation if Codex was not detected:
+Force hook installation if a tool was not detected:
 
 ```sh
 npx -y discord-coding-status@latest setup --codex-hooks
+npx -y discord-coding-status@latest setup --claude-hooks
 ```
 
-Skip Codex hooks:
+Skip either managed hook set:
 
 ```sh
 npx -y discord-coding-status@latest setup --no-codex-hooks
+npx -y discord-coding-status@latest setup --no-claude-hooks
 ```
 
 ### 2. Trust Codex hooks
@@ -120,17 +124,19 @@ Review and trust the six Discord Coding Status command hooks. This approval is r
 ```sh
 npx discord-coding-status status
 npx discord-coding-status codex-hooks-status
+npx discord-coding-status claude-hooks-status
 npx discord-coding-status quota --source oauth
+npx discord-coding-status quota --tool claude
 ```
 
 Start a Codex or Claude Code session, then submit a prompt or use a tool. Discord should update within moments.
 
 ### Updating
 
-Run setup from the latest published package to replace the copied runtime, refresh its production dependencies, reload startup, and update the managed Codex hooks:
+Run setup from the latest published package to replace the copied runtime, refresh its production dependencies, reload startup, and update the managed hooks:
 
 ```sh
-npx -y discord-coding-status@latest setup --codex-hooks
+npx -y discord-coding-status@latest setup --codex-hooks --claude-hooks
 ```
 
 Existing user configuration and session state are preserved. If the managed hook commands changed, open Codex and run `/hooks` to review and trust them again.
@@ -141,17 +147,17 @@ The default `project` detail level produces two lines:
 
 ```text
 <activity> | <project @ branch>
-<plan> • <usage windows>
+<raw model> | <plan> • <usage windows>
 ```
 
 For example:
 
 ```text
 Bash survived the assignment | my-project @ main
-Pro • weekly 54%
+claude-sonnet-4-6 | Pro • 5h 75% • weekly 60%
 ```
 
-Usage percentages are shown as **remaining** quota. Window labels come from the duration returned by Codex, so a 300-minute window becomes `5h` and a 604800-second window becomes `weekly` regardless of whether the API calls it `primary` or `secondary`.
+Usage percentages are shown as **remaining** quota. Codex window labels come from the returned duration. Claude V1 displays only the subscription plan, 5-hour Session, and 7-day Weekly windows.
 
 ### Detail levels
 
@@ -243,6 +249,20 @@ Quota refreshes run in the background. A slow or unavailable endpoint cannot blo
 
 OAuth access and refresh tokens are read from your local Codex auth file. They are used only with the relevant OpenAI authentication/usage endpoints and are never included in Discord Rich Presence.
 
+## Claude quota and model detection
+
+Managed Claude hooks read only the raw model ID from hook metadata or the bounded tail of the referenced local transcript. Prompt and response content is not copied into state, logs, quota requests, or Discord activity. A model change is picked up on the next managed event; an incomplete transcript keeps the last-known model for that session.
+
+For a compatible Claude subscription login, check the same quota text used by presence:
+
+```sh
+npx discord-coding-status quota --tool claude
+```
+
+Claude quota reads Claude Code OAuth credentials from the macOS Keychain first and `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude/.credentials.json`) second. It requests only Anthropic's fixed OAuth usage/refresh hosts, refreshes every five minutes, honors `Retry-After`, and keeps the last successful value only in daemon memory.
+
+Quota is fail-closed: Anthropic API-key mode (including `apiKeyHelper`), `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, a custom `ANTHROPIC_BASE_URL`, Bedrock, Vertex, Foundry, Mantle, and Anthropic-on-AWS modes can still show Claude's recorded raw model but never use stored subscription OAuth credentials or display Claude subscription quota. Tokens with explicit scopes must include `user:profile`.
+
 ## Codex hooks
 
 Install, inspect, or remove only the hooks managed by this project:
@@ -265,6 +285,19 @@ The installer merges hooks into `~/.codex/hooks.json` for:
 Native Codex hooks provide the active model. The daemon also reads the latest local `turn_context` entry referenced by the hook transcript to capture reasoning effort, so Rich Presence can show values such as `gpt-5.6-sol · xhigh`. Transcript prompts and responses are not included in Discord activity.
 
 Existing hook configuration is preserved, and the previous file is backed up as `hooks.json.bak` before a change is written.
+
+## Claude hooks
+
+Install, inspect, disable, or remove only the hooks managed by this project:
+
+```sh
+npx discord-coding-status setup-claude-hooks
+npx discord-coding-status claude-hooks-status
+npx discord-coding-status disable-claude-hooks
+npx discord-coding-status uninstall-claude-hooks
+```
+
+The installer merges nine lifecycle events into `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`). Each owned command contains `--managed-by=discord-coding-status`; status and uninstall use that marker, preserving unrelated settings, hook groups, and commands. The previous settings file is backed up as `settings.json.bak` before a write.
 
 ### Generic hook input
 
@@ -293,17 +326,22 @@ Concurrent hook writes use a lock plus atomic file replacement so burst updates 
 
 | Command | Description |
 | --- | --- |
-| `setup` | Install the runtime and startup entry, start the daemon, and auto-install detected Codex hooks. |
 | `config` | Edit the JSON configuration interactively. |
+| `config --no-restart` | Save config without restarting a managed daemon. |
 | `daemon` | Run the Rich Presence daemon in the foreground. |
 | `status` | Print startup installation paths and status as JSON. |
 | `uninstall` | Remove the managed startup entry and installed runtime. |
 | `setup-codex-hooks` | Install the six Codex lifecycle hooks. |
 | `codex-hooks-status` | Print managed hook status as JSON. |
 | `uninstall-codex-hooks` | Remove only hooks installed by this project. |
-| `quota [--source SOURCE]` | Read and print Codex plan/quota information. |
+| `setup-claude-hooks` / `enable-claude-hooks` | Install the nine managed Claude lifecycle hooks. |
+| `claude-hooks-status` | Print managed Claude hook status as JSON. |
+| `disable-claude-hooks` / `uninstall-claude-hooks` | Remove only Claude hooks installed by this project. |
+| `quota [--source SOURCE]` | Read and print Codex plan/quota information (backward-compatible default). |
+| `quota --tool claude` | Read and print eligible Claude subscription plan/Session/Weekly quota. |
 | `hook --tool TOOL ...` | Write or update a local session state. |
 | `codex-hook --event EVENT` | Receive a native Codex lifecycle event. |
+| `claude-hook --event EVENT` | Receive a native Claude lifecycle event. |
 | `state` | Print current sanitized, non-expired session state. |
 | `clear --session-id ID` | Remove one local session. |
 | `--help` / `--version` | Print CLI help or version. |
@@ -314,6 +352,8 @@ Useful setup flags:
 | --- | --- |
 | `--codex-hooks` | Force Codex hook installation. |
 | `--no-codex-hooks` | Skip Codex hook installation. |
+| `--claude-hooks` | Force Claude hook installation. |
+| `--no-claude-hooks` | Skip Claude hook installation. |
 | `--codex-quota-source SOURCE` | Persist the selected quota source during setup. |
 | `--no-start` | Install startup without starting it immediately. |
 | `--dry-run` | Print detected paths and planned actions without installing. |
@@ -335,7 +375,8 @@ Runtime state is stored in `~/discord-coding-status/` on every platform unless o
 - `safe` mode hides repository, branch, package, and quota metadata.
 - Hook/runtime state remains in the local state file; stale sessions expire automatically.
 - Discord activity is sent through the local Desktop RPC/IPC connection.
-- When quota is enabled, the daemon contacts the configured OpenAI authentication/usage endpoint. Tokens are never sent to Discord.
+- Codex quota contacts the configured OpenAI authentication/usage endpoint. Eligible Claude quota contacts only `api.anthropic.com` and `platform.claude.com`; Claude OAuth tokens are never sent to a custom base URL, gateway, router, or Discord.
+- Claude transcript parsing selects only model metadata from a bounded local tail and never persists raw transcript lines.
 - No Discord bot token, public HTTP listener, hosted backend, or telemetry service is required.
 
 Please report sensitive issues according to [SECURITY.md](./SECURITY.md).
@@ -357,6 +398,12 @@ Please report sensitive issues according to [SECURITY.md](./SECURITY.md).
    npx discord-coding-status codex-hooks-status
    ```
 
+   For Claude Code, confirm all nine managed hooks are installed:
+
+   ```sh
+   npx discord-coding-status claude-hooks-status
+   ```
+
 4. Open Codex, run `/hooks`, and trust the Discord Coding Status hooks.
 5. Submit a new prompt or run a tool so the session emits a fresh lifecycle event.
 6. Run the daemon in the foreground to see connection errors directly:
@@ -367,10 +414,10 @@ Please report sensitive issues according to [SECURITY.md](./SECURITY.md).
 
 ### Hooks are installed but do not update
 
-Reinstall the current runtime and hooks, then review them again in Codex:
+Reinstall the current runtime and hooks, then review the Codex hooks again in Codex:
 
 ```sh
-npx discord-coding-status setup --codex-hooks
+npx discord-coding-status setup --codex-hooks --claude-hooks
 ```
 
 The daemon watches the state directory, so changes normally arrive without waiting for the polling interval.
@@ -381,9 +428,12 @@ Verify the quota path independently:
 
 ```sh
 npx discord-coding-status quota --source oauth
+npx discord-coding-status quota --tool claude
 ```
 
-Make sure Codex is signed in and `~/.codex/auth.json` exists. If you do not want quota lookup, disable it without disabling Rich Presence:
+For Codex, make sure `~/.codex/auth.json` exists. For Claude, sign in through Claude Code with subscription OAuth and ensure the active session is not using an API key, environment token, custom base URL, or cloud provider. Claude quota intentionally remains hidden in those modes while model display continues.
+
+If you do not want Codex quota lookup, disable it without disabling Rich Presence:
 
 ```json
 {
@@ -408,10 +458,11 @@ Windows logs are written under:
 
 ### Remove everything
 
-Remove managed Codex hooks before deleting the installed runtime they reference:
+Remove managed hooks before deleting the installed runtime they reference:
 
 ```sh
 npx discord-coding-status uninstall-codex-hooks
+npx discord-coding-status uninstall-claude-hooks
 npx discord-coding-status uninstall --purge
 ```
 

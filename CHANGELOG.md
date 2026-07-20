@@ -6,6 +6,9 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+- Added native Claude Code raw-model detection, managed lifecycle hooks, and subscription OAuth plan/5-hour/weekly quota with strict custom-provider isolation.
+- Added `quota --tool claude` plus Claude hook install/status/disable/uninstall commands, preserving the existing Codex CLI contracts.
+
 ## [1.1.0] - 2026-07-15
 
 - Added active Codex model and reasoning-effort metadata to Discord Rich Presence.

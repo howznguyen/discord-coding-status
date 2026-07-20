@@ -9,6 +9,23 @@ const { exec, execFile, execFileSync, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const chalk = require('chalk') as typeof import('chalk');
 const DiscordRPC = require('discord-rpc') as any;
+const {
+  CLAUDE_LIFECYCLE_HOOK_EVENTS,
+  CLAUDE_MANAGED_HOOK_MARKER,
+  extractClaudeModelFromHookInput,
+  extractClaudeSessionId,
+  getManagedClaudeHookStatus,
+  installManagedClaudeHooks,
+  readClaudeModelFromTranscript,
+  removeManagedClaudeHooks
+} = require('./claude-hooks') as typeof import('./claude-hooks');
+const {
+  ClaudeQuotaEngine,
+  claudeCredentialGeneration,
+  createClaudeCredentialStore,
+  createFetchClaudeHttpClient,
+  evaluateClaudeQuotaEligibility
+} = require('./claude-quota') as typeof import('./claude-quota');
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -35,6 +52,7 @@ interface ActiveTool extends ToolDefinition {
   cwd?: string | null;
   sessionId?: string | null;
   startedAt?: number | null;
+  updatedAt?: number | null;
   status?: string | null;
   activity?: string | null;
   model?: string | null;
@@ -42,6 +60,7 @@ interface ActiveTool extends ToolDefinition {
   contextText?: string | null;
   projectName?: string | null;
   packageName?: string | null;
+  claudeQuotaEligible?: boolean | null;
 }
 
 interface PackageInfo {
@@ -85,6 +104,7 @@ interface HookSessionState {
   model?: string;
   effort?: string;
   context?: string;
+  claude_quota_eligible?: boolean;
 }
 
 interface HookStateFile {
@@ -165,6 +185,7 @@ const DEFAULT_CLAUDE_CLIENT_ID = '1521213655092428923';
 const DEFAULT_DETAIL_LEVEL = 'project';
 const DEFAULT_CODEX_QUOTA_SOURCE = 'oauth';
 const DEFAULT_CODEX_AUTH_FILE = '~/.codex/auth.json';
+const DEFAULT_CLAUDE_CONFIG_DIR = '~/.claude';
 const JSON_CONFIG_ALIASES: Record<string, string> = {
   codexClientId: 'DISCORD_CODING_STATUS_CODEX_CLIENT_ID',
   claudeClientId: 'DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID',
@@ -236,6 +257,10 @@ const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = [
 ];
 const CODEX_HOME = resolveHomePath(process.env.CODEX_HOME || '~/.codex');
 const CODEX_HOOKS_FILE = path.join(CODEX_HOME, 'hooks.json');
+const CLAUDE_CONFIG_DIR = resolveHomePath(process.env.CLAUDE_CONFIG_DIR || DEFAULT_CLAUDE_CONFIG_DIR);
+const CLAUDE_SETTINGS_FILE = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
+const CLAUDE_CREDENTIALS_FILE = path.join(CLAUDE_CONFIG_DIR, '.credentials.json');
+const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const CODEX_HOOK_EVENTS = [
   'SessionStart',
   'UserPromptSubmit',
@@ -593,6 +618,7 @@ let stateWatchTimer: ReturnType<typeof setTimeout> | null = null;
 let shuttingDown = false;
 const cachedUsageTextByKey = new Map<string, { text: string | null; fetchedAt: number }>();
 const usageRefreshesByKey = new Map<string, Promise<void>>();
+const claudeUsageRevisionBySession = new Map<string, number>();
 
 function normalizeDetailLevel(value: string): DetailLevel {
   const normalized = String(value || '').trim().toLowerCase();
@@ -1271,7 +1297,10 @@ function coerceHookSessionState(value: unknown): HookSessionState | null {
     activity: typeof input.activity === 'string' ? input.activity : undefined,
     model: typeof input.model === 'string' ? input.model : undefined,
     effort: typeof input.effort === 'string' ? input.effort : undefined,
-    context: typeof input.context === 'string' ? input.context : undefined
+    context: typeof input.context === 'string' ? input.context : undefined,
+    claude_quota_eligible: typeof input.claude_quota_eligible === 'boolean'
+      ? input.claude_quota_eligible
+      : undefined
   };
 }
 
@@ -1342,6 +1371,68 @@ function codexHookSessionFromArgs(args: Record<string, string | boolean>): HookS
       || turnMetadata.effort
       || undefined,
     context: getArgString(args, 'context') || findStringDeep(input, ['context', 'context_used', 'contextUsed']) || undefined
+  };
+}
+
+function statusFromClaudeHookEvent(event: string): string {
+  const normalized = event.trim().toLowerCase().replace(/_/g, '');
+
+  if (normalized === 'sessionend') {
+    return 'stopped';
+  }
+
+  if (normalized === 'notification') {
+    return 'waiting_input';
+  }
+
+  return statusFromCodexHookEvent(event);
+}
+
+function activityFromClaudeHook(event: string, input: Record<string, unknown>): string | null {
+  const activity = activityFromCodexHook(event, input);
+  return activity ? activity.replace(/Codex/g, 'Claude Code') : null;
+}
+
+function claudeHookSessionFromArgs(args: Record<string, string | boolean>): HookSessionState {
+  const input = readHookInput();
+  const transcriptPath = findStringDeep(input, ['transcript_path', 'transcriptPath']);
+  const event = getArgString(args, 'event')
+    || findStringDeep(input, ['hook_event_name', 'hook_event', 'hookEvent', 'event'])
+    || 'unknown';
+  const cwd = path.resolve(
+    getArgString(args, 'cwd')
+      || findStringDeep(input, ['cwd', 'current_working_directory', 'working_directory', 'workspace'])
+      || process.cwd()
+  );
+  const sessionId = getArgString(args, 'session-id')
+    || getArgString(args, 'session_id')
+    || extractClaudeSessionId(input)
+    || findStringDeep(input, ['conversation_id', 'conversationId', 'thread_id', 'threadId'])
+    || `claude:cli:${cwd}:${process.ppid}`;
+  const model = getArgString(args, 'model')
+    || extractClaudeModelFromHookInput(input)
+    || readClaudeModelFromTranscript(transcriptPath)
+    || undefined;
+  const quotaRequestOptions = claudeQuotaRequestOptions();
+  const eligibility = evaluateClaudeQuotaEligibility(
+    quotaRequestOptions.environment || process.env,
+    quotaRequestOptions.mode
+  );
+
+  return {
+    tool: 'claude',
+    surface: getArgString(args, 'surface') || 'cli',
+    status: getArgString(args, 'status') || statusFromClaudeHookEvent(event),
+    session_id: sessionId,
+    cwd,
+    updated_at: Date.now(),
+    project: getArgString(args, 'project') || undefined,
+    package: getArgString(args, 'package') || undefined,
+    title: getArgString(args, 'title') || undefined,
+    activity: getArgString(args, 'activity') || activityFromClaudeHook(event, input) || undefined,
+    model,
+    context: getArgString(args, 'context') || undefined,
+    claude_quota_eligible: eligibility.eligible
   };
 }
 
@@ -1526,6 +1617,10 @@ function detectedCodexForSetup(detections: SetupToolDetection[]): boolean {
   return detections.some((item) => item.detected && item.key.startsWith('codex'));
 }
 
+function detectedClaudeForSetup(detections: SetupToolDetection[]): boolean {
+  return detections.some((item) => item.detected && item.key === 'claudeCode');
+}
+
 function shouldInstallCodexHooks(args: Record<string, string | boolean>, detections: SetupToolDetection[]): boolean {
   if (args['no-codex-hooks'] || args.no_codex_hooks) {
     return false;
@@ -1536,6 +1631,18 @@ function shouldInstallCodexHooks(args: Record<string, string | boolean>, detecti
   }
 
   return detectedCodexForSetup(detections);
+}
+
+function shouldInstallClaudeHooks(args: Record<string, string | boolean>, detections: SetupToolDetection[]): boolean {
+  if (args['no-claude-hooks'] || args.no_claude_hooks) {
+    return false;
+  }
+
+  if (args['claude-hooks'] || args.claude_hooks) {
+    return true;
+  }
+
+  return detectedClaudeForSetup(detections);
 }
 
 function printSetupDetections(detections: SetupToolDetection[]): void {
@@ -2248,6 +2355,111 @@ function printCodexHooksStatus(): void {
   }, null, 2));
 }
 
+function claudeHookCommand(scriptPath: string, event: string): string {
+  return [
+    shellQuoteArg(process.execPath),
+    shellQuoteArg(scriptPath),
+    'claude-hook',
+    '--event',
+    event,
+    CLAUDE_MANAGED_HOOK_MARKER
+  ].join(' ');
+}
+
+function readClaudeSettings(): Record<string, unknown> {
+  if (!fs.existsSync(CLAUDE_SETTINGS_FILE)) {
+    return {};
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_FILE, 'utf8')) as unknown;
+  return asRecord(parsed) || {};
+}
+
+function claudeQuotaRequestOptions(): import('./claude-quota').ClaudeQuotaRequestOptions {
+  try {
+    const settings = readClaudeSettings();
+    const configuredEnvironment = asRecord(settings.env) || {};
+    const environment: Record<string, string | undefined> = { ...process.env };
+    for (const [key, value] of Object.entries(configuredEnvironment)) {
+      if (
+        typeof value === 'string'
+        && value.trim()
+        && !String(environment[key] || '').trim()
+      ) {
+        environment[key] = value;
+      }
+    }
+
+    return {
+      mode: extractString(settings.apiKeyHelper) ? 'api-key' : 'auto',
+      environment
+    };
+  } catch (_) {
+    return {
+      mode: 'custom-provider',
+      environment: process.env
+    };
+  }
+}
+
+function writeClaudeSettings(settings: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_FILE), { recursive: true });
+
+  if (fs.existsSync(CLAUDE_SETTINGS_FILE)) {
+    fs.copyFileSync(CLAUDE_SETTINGS_FILE, `${CLAUDE_SETTINGS_FILE}.bak`);
+  }
+
+  const tempFile = `${CLAUDE_SETTINGS_FILE}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempFile, CLAUDE_SETTINGS_FILE);
+  } finally {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch (_) {
+      // The successful rename already removed the temporary pathname.
+    }
+  }
+}
+
+function installClaudeHooks(scriptPath: string): { settingsFile: string; installed: number; removed: number } {
+  const result = installManagedClaudeHooks(readClaudeSettings(), {
+    events: CLAUDE_LIFECYCLE_HOOK_EVENTS,
+    commandForEvent: (eventName) => claudeHookCommand(scriptPath, eventName),
+    timeout: 5
+  });
+  writeClaudeSettings(result.settings);
+  return {
+    settingsFile: CLAUDE_SETTINGS_FILE,
+    installed: result.installed,
+    removed: result.removed
+  };
+}
+
+function uninstallClaudeHooks(): { settingsFile: string; removed: number } {
+  const result = removeManagedClaudeHooks(readClaudeSettings());
+  if (result.removed > 0) {
+    writeClaudeSettings(result.settings);
+  }
+
+  return {
+    settingsFile: CLAUDE_SETTINGS_FILE,
+    removed: result.removed
+  };
+}
+
+function printClaudeHooksStatus(): void {
+  const settings = readClaudeSettings();
+  const status = getManagedClaudeHookStatus(settings, CLAUDE_LIFECYCLE_HOOK_EVENTS);
+  console.log(JSON.stringify({
+    claudeConfigDir: CLAUDE_CONFIG_DIR,
+    settingsFile: CLAUDE_SETTINGS_FILE,
+    settingsFileExists: fs.existsSync(CLAUDE_SETTINGS_FILE),
+    expectedEvents: CLAUDE_LIFECYCLE_HOOK_EVENTS,
+    ...status
+  }, null, 2));
+}
+
 function printHelp(): void {
   console.log(`${title(APP_TITLE)} ${dim(VERSION)}
 ${dim('Local Discord Rich Presence for Codex and Claude Code.')}
@@ -2261,11 +2473,16 @@ ${chalk.bold('Usage:')}
   discord-coding-status setup-codex-hooks     Install Codex lifecycle hooks
   discord-coding-status codex-hooks-status    Print Codex hook install status
   discord-coding-status uninstall-codex-hooks Remove Codex lifecycle hooks
+  discord-coding-status setup-claude-hooks    Install Claude lifecycle hooks
+  discord-coding-status claude-hooks-status   Print Claude hook install status
+  discord-coding-status uninstall-claude-hooks Remove Claude lifecycle hooks
   discord-coding-status hook --tool codex     Write or update a local session state
   discord-coding-status codex-hook --event stop
+  discord-coding-status claude-hook --event Stop
   discord-coding-status clear --session-id ID
   discord-coding-status state
   discord-coding-status quota
+  discord-coding-status quota --tool claude
   discord-coding-status --version
 
 ${chalk.bold('Default Discord Application IDs:')}
@@ -2289,10 +2506,12 @@ ${chalk.bold('Examples:')}
   ${commandText('npx -y discord-coding-status@latest setup')}
   ${commandText('npx -y discord-coding-status@latest config')}
   ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
+  ${commandText('npx -y discord-coding-status@latest setup --claude-hooks')}
   ${commandText('discord-coding-status status')}
   ${commandText('discord-coding-status daemon')}
   ${commandText('DISCORD_CODING_STATUS_DETAIL_LEVEL=project discord-coding-status state')}
   ${commandText('discord-coding-status quota --source oauth')}
+  ${commandText('discord-coding-status quota --tool claude')}
 `);
 }
 
@@ -2313,7 +2532,7 @@ function runMetaCommand(command: string): boolean {
 }
 
 function runStateCommand(command: string): boolean {
-  if (!['hook', 'codex-hook', 'clear', 'state'].includes(command)) {
+  if (!['hook', 'codex-hook', 'claude-hook', 'clear', 'state'].includes(command)) {
     return false;
   }
 
@@ -2339,6 +2558,12 @@ function runStateCommand(command: string): boolean {
 
   if (command === 'codex-hook') {
     const session = codexHookSessionFromArgs(args);
+    upsertHookState(session);
+    return true;
+  }
+
+  if (command === 'claude-hook') {
+    const session = claudeHookSessionFromArgs(args);
     upsertHookState(session);
     return true;
   }
@@ -2376,7 +2601,8 @@ function runSetupCommand(command: string): boolean {
 
   const dryRun = Boolean(args['dry-run'] || args.dry_run);
   const startNow = !Boolean(args['no-start'] || args.no_start);
-  const installHooks = shouldInstallCodexHooks(args, detections);
+  const installCodexHookSet = shouldInstallCodexHooks(args, detections);
+  const installClaudeHookSet = shouldInstallClaudeHooks(args, detections);
 
   if (dryRun) {
     console.log(JSON.stringify({
@@ -2388,10 +2614,16 @@ function runSetupCommand(command: string): boolean {
       claudeClientId: CLAUDE_CLIENT_ID,
       detectedTools: detections,
       codexHooks: {
-        install: installHooks,
+        install: installCodexHookSet,
         mode: (args['codex-hooks'] || args.codex_hooks)
           ? 'forced'
           : ((args['no-codex-hooks'] || args.no_codex_hooks) ? 'disabled' : 'auto')
+      },
+      claudeHooks: {
+        install: installClaudeHookSet,
+        mode: (args['claude-hooks'] || args.claude_hooks)
+          ? 'forced'
+          : ((args['no-claude-hooks'] || args.no_claude_hooks) ? 'disabled' : 'auto')
       },
       startup: process.platform === 'darwin'
         ? path.join(os.homedir(), 'Library', 'LaunchAgents', `${MACOS_LAUNCH_AGENT_ID}.plist`)
@@ -2403,8 +2635,11 @@ function runSetupCommand(command: string): boolean {
   writeSetupConfig(args);
   const scriptPath = copyRuntimeToInstallDir();
   const startupTarget = installStartup(scriptPath, startNow);
-  const codexHooks = installHooks
+  const codexHooks = installCodexHookSet
     ? installCodexHooks(scriptPath)
+    : null;
+  const claudeHooks = installClaudeHookSet
+    ? installClaudeHooks(scriptPath)
     : null;
 
   console.log(success(`${APP_TITLE} installed.`));
@@ -2419,6 +2654,13 @@ function runSetupCommand(command: string): boolean {
     console.log(warning('Codex hooks skipped by --no-codex-hooks.'));
   } else {
     console.log(dim('Codex hooks skipped because Codex was not detected.'));
+  }
+  if (claudeHooks) {
+    console.log(`${chalk.bold('Claude hooks:')} ${success(`${claudeHooks.installed} installed`)} in ${accent(claudeHooks.settingsFile)}`);
+  } else if (detectedClaudeForSetup(detections)) {
+    console.log(warning('Claude hooks skipped by --no-claude-hooks.'));
+  } else {
+    console.log(dim('Claude hooks skipped because Claude Code was not detected.'));
   }
   if (!startNow) {
     console.log(dim('Startup is installed; daemon will run at next login.'));
@@ -2453,12 +2695,66 @@ function runCodexHooksCommand(command: string): boolean {
   return true;
 }
 
+function runClaudeHooksCommand(command: string): boolean {
+  if (![
+    'setup-claude-hooks',
+    'install-claude-hooks',
+    'enable-claude-hooks',
+    'disable-claude-hooks',
+    'uninstall-claude-hooks',
+    'claude-hooks-status'
+  ].includes(command)) {
+    return false;
+  }
+
+  if (command === 'claude-hooks-status') {
+    printClaudeHooksStatus();
+    return true;
+  }
+
+  if (command === 'disable-claude-hooks' || command === 'uninstall-claude-hooks') {
+    const result = uninstallClaudeHooks();
+    console.log(`${success(`Removed ${result.removed}`)} ${APP_TITLE} Claude hook(s) from ${accent(result.settingsFile)}.`);
+    return true;
+  }
+
+  const scriptPath = copyRuntimeToInstallDir();
+  const result = installClaudeHooks(scriptPath);
+  console.log(`${success(`Installed ${result.installed}`)} ${APP_TITLE} Claude hook(s) in ${accent(result.settingsFile)}.`);
+  if (result.removed) {
+    console.log(warning(`Replaced ${result.removed} existing ${APP_TITLE} Claude hook(s).`));
+  }
+  return true;
+}
+
 async function runQuotaCommand(command: string): Promise<boolean> {
   if (!['quota', 'codex-quota'].includes(command)) {
     return false;
   }
 
   const args = parseArgs(process.argv.slice(3));
+  const requestedTool = command === 'quota'
+    ? (getArgString(args, 'tool') || 'codex').trim().toLowerCase()
+    : 'codex';
+
+  if (requestedTool === 'claude' || requestedTool === 'claude-code') {
+    const result = await claudeQuotaEngine.getQuota(claudeQuotaRequestOptions());
+    if (result.status === 'unavailable') {
+      console.error(danger(result.diagnostic));
+      process.exitCode = 1;
+      return true;
+    }
+
+    console.log(result.quota.text);
+    return true;
+  }
+
+  if (requestedTool !== 'codex') {
+    console.error(danger(`Unsupported quota tool: ${requestedTool}. Use codex or claude.`));
+    process.exitCode = 1;
+    return true;
+  }
+
   const source = normalizeCodexQuotaSource(getArgString(args, 'source') || CODEX_QUOTA_SOURCE);
   const quotaText = await getNativeCodexQuotaText({ ...TOOLS.codexCli }, source);
 
@@ -3235,6 +3531,204 @@ async function getNativeCodexRichState(
   return null;
 }
 
+function parseClaudeCredentialJson(value: string): unknown | null {
+  const text = value.trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function readClaudeKeychainCredentials(): Promise<unknown | null> {
+  if (
+    process.platform !== 'darwin'
+    || envValue('DISCORD_CODING_STATUS_CLAUDE_KEYCHAIN', 'on').trim().toLowerCase() === 'off'
+  ) {
+    return null;
+  }
+
+  try {
+    const { stdout } = await execFileAsync('security', [
+      'find-generic-password',
+      '-s',
+      CLAUDE_KEYCHAIN_SERVICE,
+      '-w'
+    ], {
+      timeout: 2_000,
+      maxBuffer: 256 * 1024
+    }) as { stdout: string };
+    return parseClaudeCredentialJson(stdout);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function readClaudeKeychainAccount(): Promise<string | null> {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+
+  try {
+    const { stdout } = await execFileAsync('security', [
+      'find-generic-password',
+      '-s',
+      CLAUDE_KEYCHAIN_SERVICE
+    ], {
+      timeout: 2_000,
+      maxBuffer: 64 * 1024
+    }) as { stdout: string };
+    const match = stdout.match(/"acct"<blob>="([^"]+)"/);
+    return match?.[1] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeClaudeKeychainCredentials(value: unknown): Promise<void> {
+  if (
+    process.platform !== 'darwin'
+    || envValue('DISCORD_CODING_STATUS_CLAUDE_KEYCHAIN', 'on').trim().toLowerCase() === 'off'
+  ) {
+    throw new Error('Claude Code Keychain credentials are available only on macOS.');
+  }
+
+  const account = await readClaudeKeychainAccount() || os.userInfo().username;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('security', [
+      'add-generic-password',
+      '-U',
+      '-a',
+      account,
+      '-s',
+      CLAUDE_KEYCHAIN_SERVICE,
+      '-w'
+    ], {
+      stdio: ['pipe', 'ignore', 'ignore']
+    });
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('Timed out while updating Claude Code Keychain credentials.'));
+    }, 2_000);
+
+    child.once('error', (error: Error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code: number | null) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error('Failed to update Claude Code Keychain credentials.'));
+      }
+    });
+    child.stdin.end(`${JSON.stringify(value)}\n`);
+  });
+}
+
+async function readClaudeFileCredentials(): Promise<unknown | null> {
+  if (!fs.existsSync(CLAUDE_CREDENTIALS_FILE)) {
+    return null;
+  }
+
+  try {
+    return parseClaudeCredentialJson(fs.readFileSync(CLAUDE_CREDENTIALS_FILE, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeClaudeFileCredentials(value: unknown): Promise<void> {
+  fs.mkdirSync(path.dirname(CLAUDE_CREDENTIALS_FILE), { recursive: true });
+  const tempFile = `${CLAUDE_CREDENTIALS_FILE}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tempFile, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempFile, CLAUDE_CREDENTIALS_FILE);
+  } finally {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch (_) {
+      // The successful rename already removed the temporary pathname.
+    }
+  }
+}
+
+const claudeCredentialStore = createClaudeCredentialStore({
+  keychain: {
+    read: readClaudeKeychainCredentials,
+    write: writeClaudeKeychainCredentials,
+    async compareAndSwap(expectedGeneration, update) {
+      const current = await readClaudeKeychainCredentials();
+      if (claudeCredentialGeneration(current) !== expectedGeneration) {
+        return false;
+      }
+      const latest = await readClaudeKeychainCredentials();
+      if (claudeCredentialGeneration(latest) !== expectedGeneration) {
+        return false;
+      }
+      await writeClaudeKeychainCredentials(update(latest));
+      return true;
+    }
+  },
+  file: {
+    read: readClaudeFileCredentials,
+    write: writeClaudeFileCredentials,
+    async compareAndSwap(expectedGeneration, update) {
+      const current = await readClaudeFileCredentials();
+      if (claudeCredentialGeneration(current) !== expectedGeneration) {
+        return false;
+      }
+      const latest = await readClaudeFileCredentials();
+      if (claudeCredentialGeneration(latest) !== expectedGeneration) {
+        return false;
+      }
+      await writeClaudeFileCredentials(update(latest));
+      return true;
+    }
+  }
+});
+const claudeQuotaEngine = new ClaudeQuotaEngine({
+  credentials: claudeCredentialStore,
+  http: createFetchClaudeHttpClient(),
+  userAgent: `claude-code/${VERSION} (${APP_ID})`
+});
+let lastClaudeQuotaDiagnostic: string | null = null;
+
+function recordClaudeQuotaDiagnostic(message: string | null): void {
+  if (!message || message === lastClaudeQuotaDiagnostic) {
+    return;
+  }
+
+  lastClaudeQuotaDiagnostic = message;
+  log(`[claude-quota] ${message}`);
+}
+
+async function getNativeClaudeQuotaText(tool?: ActiveTool): Promise<string | null> {
+  if (tool && toolFamilyForTool(tool) !== 'claude') {
+    return null;
+  }
+
+  if (tool && tool.claudeQuotaEligible !== true) {
+    recordClaudeQuotaDiagnostic('Claude quota is hidden because the active session is not confirmed as subscription OAuth.');
+    return null;
+  }
+
+  const result = await claudeQuotaEngine.getQuota(claudeQuotaRequestOptions());
+  recordClaudeQuotaDiagnostic(result.diagnostic);
+  if (result.status === 'unavailable') {
+    return null;
+  }
+
+  lastClaudeQuotaDiagnostic = null;
+  return result.quota.text;
+}
+
 function log(message: string): void {
   console.log(`${dim(`[${APP_ID}]`)} ${dim(new Date().toISOString())} ${message}`);
 }
@@ -3679,13 +4173,15 @@ function toolFromSession(session: HookSessionState): ActiveTool {
       cwd: session.cwd,
       sessionId: session.session_id,
       startedAt: session.started_at || session.updated_at || null,
+      updatedAt: session.updated_at || null,
       status: session.status,
       activity: session.activity || null,
       model: session.model || null,
       effort: session.effort || null,
       contextText: session.context || null,
       projectName: session.project || null,
-      packageName: session.package || null
+      packageName: session.package || null,
+      claudeQuotaEligible: session.claude_quota_eligible ?? null
     };
   }
 
@@ -3729,6 +4225,16 @@ function toolFromSession(session: HookSessionState): ActiveTool {
 function detectStateTools(): ActiveTool[] {
   const state = cleanupStateSessions(readStateFile(), Date.now());
   const sessions = Object.values(state.sessions);
+  const activeClaudeSessionIds = new Set(
+    sessions
+      .filter((session) => ['claude', 'claude-code'].includes(session.tool.trim().toLowerCase()))
+      .map((session) => session.session_id)
+  );
+  for (const sessionId of claudeUsageRevisionBySession.keys()) {
+    if (!activeClaudeSessionIds.has(sessionId)) {
+      claudeUsageRevisionBySession.delete(sessionId);
+    }
+  }
 
   if (!sessions.length) {
     return [];
@@ -3880,13 +4386,31 @@ async function getUsageText(tool?: ActiveTool): Promise<string | null> {
     return null;
   }
 
-  if (USAGE_TEXT) {
+  const cacheKey = toolFamilyForTool(tool) || 'other';
+  const isClaude = cacheKey === 'claude';
+  if (isClaude && tool?.claudeQuotaEligible !== true) {
+    cachedUsageTextByKey.delete(cacheKey);
+    if (tool?.sessionId) {
+      claudeUsageRevisionBySession.delete(tool.sessionId);
+    }
+    return null;
+  }
+
+  let cachedUsage = cachedUsageTextByKey.get(cacheKey);
+  if (isClaude && tool?.sessionId && tool.updatedAt) {
+    const previousRevision = claudeUsageRevisionBySession.get(tool.sessionId);
+    if (previousRevision !== tool.updatedAt) {
+      claudeUsageRevisionBySession.set(tool.sessionId, tool.updatedAt);
+      cachedUsageTextByKey.delete(cacheKey);
+      cachedUsage = undefined;
+    }
+  }
+
+  if (!isClaude && USAGE_TEXT) {
     return truncatePresenceText(USAGE_TEXT);
   }
 
   const now = Date.now();
-  const cacheKey = toolFamilyForTool(tool) || 'other';
-  const cachedUsage = cachedUsageTextByKey.get(cacheKey);
   if (cachedUsage && now - cachedUsage.fetchedAt < USAGE_REFRESH_INTERVAL_MS) {
     return cachedUsage.text;
   }
@@ -3896,7 +4420,7 @@ async function getUsageText(tool?: ActiveTool): Promise<string | null> {
       .catch((error) => {
         logError(`Usage refresh failed for ${cacheKey}`, error);
         cachedUsageTextByKey.set(cacheKey, {
-          text: cachedUsage?.text || null,
+          text: isClaude ? null : cachedUsage?.text || null,
           fetchedAt: Date.now()
         });
       })
@@ -3910,20 +4434,27 @@ async function getUsageText(tool?: ActiveTool): Promise<string | null> {
     usageRefreshesByKey.set(cacheKey, refresh);
   }
 
-  return cachedUsage?.text || PLAN_TEXT_OVERRIDE || null;
+  return cachedUsage?.text || (isClaude ? null : PLAN_TEXT_OVERRIDE || null);
 }
 
 async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string): Promise<void> {
   const cachedUsage = cachedUsageTextByKey.get(cacheKey);
   let text: string | null = null;
 
-  const nativeCodexRichState = await getNativeCodexRichState(tool);
-  const nativeCodexQuotaText = nativeCodexRichState ? formatRichStateText(nativeCodexRichState) : null;
-  if (nativeCodexQuotaText) {
-    text = nativeCodexQuotaText;
-  } else if (PLAN_TEXT_OVERRIDE) {
+  const toolFamily = toolFamilyForTool(tool);
+  if (toolFamily === 'codex') {
+    const nativeCodexRichState = await getNativeCodexRichState(tool);
+    const nativeCodexQuotaText = nativeCodexRichState ? formatRichStateText(nativeCodexRichState) : null;
+    if (nativeCodexQuotaText) {
+      text = nativeCodexQuotaText;
+    }
+  } else if (toolFamily === 'claude') {
+    text = await getNativeClaudeQuotaText(tool);
+  }
+
+  if (!text && toolFamily !== 'claude' && PLAN_TEXT_OVERRIDE) {
     text = PLAN_TEXT_OVERRIDE;
-  } else if (USAGE_COMMAND) {
+  } else if (!text && toolFamily !== 'claude' && USAGE_COMMAND) {
     try {
       const { stdout } = await execAsync(USAGE_COMMAND, {
         timeout: USAGE_TIMEOUT_MS,
@@ -3937,7 +4468,9 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
     }
   }
 
-  const nextText = text || cachedUsage?.text || null;
+  const nextText = toolFamily === 'claude'
+    ? text
+    : text || cachedUsage?.text || null;
   cachedUsageTextByKey.set(cacheKey, {
     text: nextText,
     fetchedAt: Date.now()
@@ -4343,6 +4876,10 @@ async function main(): Promise<void> {
   }
 
   if (runCodexHooksCommand(command)) {
+    process.exit(process.exitCode || 0);
+  }
+
+  if (runClaudeHooksCommand(command)) {
     process.exit(process.exitCode || 0);
   }
 
