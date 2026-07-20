@@ -10,13 +10,14 @@
   "type": "commonjs",
   "files": [
     "dist/",
+    "docs/",
     "README.md",
     "assets/cover.png",
     "LICENSE",
     ".env.example"
   ],
   "scripts": {
-    "build": "tsc && node scripts/make-bin.js",
+    "build": "node scripts/clean-dist.js && tsc && node scripts/make-bin.js",
     "prepack": "npm run build",
     "start": "node dist/cli.js daemon",
     "setup": "node dist/cli.js setup",

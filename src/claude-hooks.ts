@@ -1,5 +1,5 @@
-import fs = require('node:fs');
-import path = require('node:path');
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export const CLAUDE_MANAGED_HOOK_MARKER = '--managed-by=discord-coding-status';
 export const CLAUDE_LIFECYCLE_HOOK_EVENTS = [

@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const readlineCore = require('node:readline') as typeof import('node:readline');
-const readline = require('node:readline/promises') as typeof import('node:readline/promises');
-const { exec, execFile, execFileSync, spawn } = require('node:child_process');
-const { promisify } = require('node:util');
-const chalk = require('chalk') as typeof import('chalk');
-const DiscordRPC = require('discord-rpc') as any;
-const {
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as readlineCore from 'node:readline';
+import * as readline from 'node:readline/promises';
+import { exec, execFile, execFileSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import chalk from 'chalk';
+import DiscordRPC from 'discord-rpc';
+import {
   CLAUDE_LIFECYCLE_HOOK_EVENTS,
   CLAUDE_MANAGED_HOOK_MARKER,
   extractClaudeModelFromHookInput,
@@ -19,191 +19,103 @@ const {
   installManagedClaudeHooks,
   readClaudeModelFromTranscript,
   removeManagedClaudeHooks
-} = require('./claude-hooks') as typeof import('./claude-hooks');
-const {
+} from './claude-hooks';
+import {
   ClaudeQuotaEngine,
   claudeCredentialGeneration,
   createClaudeCredentialStore,
   createFetchClaudeHttpClient,
   evaluateClaudeQuotaEligibility
-} = require('./claude-quota') as typeof import('./claude-quota');
+} from './claude-quota';
+import {
+  detectedClaudeForSetup,
+  detectedCodexForSetup,
+  shouldInstallClaudeHooks,
+  shouldInstallCodexHooks
+} from './commands/setup/policy';
+import { detectSetupTools } from './adapters/system/installed-tools';
+import { runMetaCommand } from './commands/meta/command';
+import { getArgString, parseArgs } from './commands/args';
+import {
+  detectActiveTools
+} from './core/detection/active-tools';
+import {
+  DEFAULT_CLAUDE_CLIENT_ID,
+  DEFAULT_CODEX_CLIENT_ID,
+  findToolProviderByAlias,
+  requireToolPresence,
+  toolProviders
+} from './providers/registry';
+import {
+  discordApplicationForTool,
+  resolveDiscordApplications
+} from './providers/discord';
+import {
+  getCwdForProcess,
+  getProcessList
+} from './adapters/system/processes';
+import type {
+  ActivityStyle,
+  ConfigEditorField,
+  ConfigPreviewSamples,
+  ConfigTuiItem,
+  ConfigTuiResult,
+  DetailLevel,
+  DisplayLayout
+} from './commands/config/types';
+import {
+  BOOLEAN_CONFIG_KEYS,
+  CONFIG_TUI_ITEMS,
+  DEFAULT_ACTIVITY_STYLE,
+  DEFAULT_CLAUDE_CONFIG_DIR,
+  DEFAULT_CODEX_AUTH_FILE,
+  DEFAULT_CODEX_QUOTA_SOURCE,
+  DEFAULT_DETAIL_LEVEL,
+  ENV_CONFIG_ALIASES,
+  createConfigEditorFields
+} from './commands/config/schema';
+import {
+  defaultDisplayLayout,
+  displayLayoutFromEntries,
+  displaySettingFromEnvironment,
+  envPathValue,
+  envValue,
+  loadEnvironmentFiles,
+  normalizeActivityStyle,
+  normalizeCodexQuotaSource,
+  normalizeDetailLevel,
+  parseDotEnv,
+  parseBoolean,
+  parseOptionalBoolean,
+  readJsonConfigFile,
+  resolveHomePath
+} from './commands/config/settings';
+import type { SetupToolDetection } from './core/detection/types';
+import type { HookSessionState, HookStateFile } from './core/hooks/types';
+import type {
+  CodexOAuthCredentials,
+  CodexQuotaSnapshot,
+  CodexQuotaSnapshotSource,
+  CodexQuotaSource,
+  CodexQuotaWindow,
+  PendingJsonRpcRequest
+} from './core/quota/types';
+import type {
+  PackageInfo,
+  PresenceMetadata,
+  PresencePayload,
+  RichStateParts
+} from './core/presence/types';
+import type {
+  ActiveTool,
+  ToolDefinition,
+  ToolFamily
+} from './core/tools/types';
+import type { RpcConnectionState } from './adapters/discord/types';
+import type { DaemonRefreshResult } from './adapters/startup/types';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
-
-type DetailLevel = 'safe' | 'project' | 'full';
-type ActivityStyle = 'fun' | 'normal' | 'technical' | 'minimal';
-type ToolKey = 'claude' | 'codexApp' | 'codexCli';
-type ToolFamily = 'claude' | 'codex' | 'other';
-
-interface ToolDefinition {
-  key: string;
-  details: string;
-  state: string;
-  family?: ToolFamily;
-}
-
-interface ProcessInfo {
-  pid: number;
-  line: string;
-  raw: string;
-}
-
-interface ActiveTool extends ToolDefinition {
-  processInfo?: ProcessInfo;
-  cwd?: string | null;
-  sessionId?: string | null;
-  startedAt?: number | null;
-  updatedAt?: number | null;
-  status?: string | null;
-  activity?: string | null;
-  model?: string | null;
-  effort?: string | null;
-  contextText?: string | null;
-  projectName?: string | null;
-  packageName?: string | null;
-  claudeQuotaEligible?: boolean | null;
-}
-
-interface PackageInfo {
-  root: string;
-  name: string | null;
-}
-
-interface PresenceMetadata {
-  projectName: string | null;
-  packageName: string | null;
-  branchName: string | null;
-  usageText: string | null;
-}
-
-interface RichStateParts {
-  planText: string | null;
-  limitsText: string | null;
-}
-
-interface PresencePayload {
-  details?: string;
-  state?: string;
-  startTimestamp: Date;
-  instance: false;
-  largeImageKey?: string;
-  smallImageKey?: string;
-}
-
-interface HookSessionState {
-  tool: string;
-  surface: string;
-  status: string;
-  session_id: string;
-  cwd: string;
-  updated_at: number;
-  started_at?: number;
-  project?: string;
-  package?: string;
-  title?: string;
-  activity?: string;
-  model?: string;
-  effort?: string;
-  context?: string;
-  claude_quota_eligible?: boolean;
-}
-
-interface HookStateFile {
-  version: 1;
-  sessions: Record<string, HookSessionState>;
-}
-
-type CodexQuotaSource = 'off' | 'rpc' | 'oauth' | 'auto';
-type CodexQuotaSnapshotSource = 'codex-rpc' | 'codex-oauth';
-
-interface CodexQuotaWindow {
-  usedPercent: number;
-  windowMinutes: number | null;
-}
-
-interface CodexQuotaSnapshot {
-  source: CodexQuotaSnapshotSource;
-  planText: string | null;
-  primary: CodexQuotaWindow | null;
-  secondary: CodexQuotaWindow | null;
-  creditsRemaining: number | null;
-}
-
-interface CodexOAuthCredentials {
-  accessToken: string | null;
-  refreshToken: string | null;
-  accountId: string | null;
-}
-
-interface PendingJsonRpcRequest {
-  method: string;
-  timeout: ReturnType<typeof setTimeout>;
-  resolve: (message: Record<string, unknown>) => void;
-  reject: (error: Error) => void;
-}
-
-interface RpcConnectionState {
-  client: any | null;
-  ready: boolean;
-  reconnectTimer: ReturnType<typeof setTimeout> | null;
-  connecting: Promise<void> | null;
-  activeToolKey: string | null;
-  activityStartedAt: Date | null;
-  lastSentActivitySignature: string | null;
-  lastCleared: boolean;
-  connectionAttempt: number;
-}
-
-interface SetupToolDetection {
-  key: 'codexCli' | 'codexApp' | 'codexHome' | 'claudeCode';
-  name: string;
-  detected: boolean;
-  detail: string | null;
-}
-
-interface ConfigEditorField {
-  key: string;
-  label: string;
-  defaultValue: string;
-  choices?: string[];
-}
-
-interface DisplayLayout {
-  activity: boolean;
-  project: boolean;
-  model: boolean;
-  quota: boolean;
-  context: boolean;
-  package: boolean;
-}
-
-interface ConfigPreviewSamples {
-  activity: string;
-  project: string;
-  model: string;
-  quota: string;
-  context: string;
-  package: string;
-}
-
-interface ConfigTuiItem {
-  key: string;
-  label: string;
-  section: 'Top line' | 'Bottom line' | 'Behavior';
-  kind: 'toggle' | 'choice';
-  choices?: string[];
-}
-
-interface ConfigTuiResult {
-  action: 'save' | 'advanced' | 'cancel';
-  entries: Record<string, string>;
-}
-
-interface DaemonRefreshResult {
-  status: 'restarted' | 'not-installed' | 'unsupported' | 'failed' | 'skipped';
-  error?: string;
-}
 
 const APP_ID = 'discord-coding-status';
 const APP_TITLE = 'Discord Coding Status';
@@ -218,170 +130,7 @@ const CONFIG_DIR = getConfigDirectory();
 const CONFIG_FILE = path.join(USER_DATA_DIR, 'config.json');
 const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, '.env');
 const DEFAULT_STATE_FILE = path.join(USER_DATA_DIR, 'states.json');
-const DEFAULT_CODEX_CLIENT_ID = '1517375602662051900';
-const DEFAULT_CLAUDE_CLIENT_ID = '1521213655092428923';
-const DEFAULT_DETAIL_LEVEL = 'project';
-const DEFAULT_CODEX_QUOTA_SOURCE = 'oauth';
-const DEFAULT_CODEX_AUTH_FILE = '~/.codex/auth.json';
-const DEFAULT_CLAUDE_CONFIG_DIR = '~/.claude';
-const DEFAULT_ACTIVITY_STYLE: ActivityStyle = 'fun';
-const JSON_CONFIG_ALIASES: Record<string, string> = {
-  codexClientId: 'DISCORD_CODING_STATUS_CODEX_CLIENT_ID',
-  claudeClientId: 'DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID',
-  clientId: 'DISCORD_CLIENT_ID',
-  detailLevel: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
-  quotaSource: 'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
-  codexAuthFile: 'DISCORD_CODING_STATUS_CODEX_AUTH_FILE',
-  stateFile: 'DISCORD_CODING_STATUS_STATE_FILE',
-  claudeImageKey: 'DISCORD_CODING_STATUS_CLAUDE_IMAGE_KEY',
-  codexImageKey: 'DISCORD_CODING_STATUS_CODEX_IMAGE_KEY',
-  largeImageKey: 'DISCORD_LARGE_IMAGE_KEY',
-  smallImageKey: 'DISCORD_SMALL_IMAGE_KEY',
-  planText: 'DISCORD_CODING_STATUS_PLAN_TEXT',
-  limitsText: 'DISCORD_CODING_STATUS_LIMITS_TEXT',
-  preferCodexCli: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
-  showActivity: 'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
-  showProject: 'DISCORD_CODING_STATUS_SHOW_PROJECT',
-  showModel: 'DISCORD_CODING_STATUS_SHOW_MODEL',
-  showQuota: 'DISCORD_CODING_STATUS_SHOW_QUOTA',
-  showContext: 'DISCORD_CODING_STATUS_SHOW_CONTEXT',
-  activityStyle: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
-  showPackage: 'DISCORD_CODING_STATUS_SHOW_PACKAGE'
-};
-const ENV_CONFIG_ALIASES = Object.fromEntries(
-  Object.entries(JSON_CONFIG_ALIASES).map(([alias, envName]) => [envName, alias])
-) as Record<string, string>;
-const BOOLEAN_CONFIG_KEYS = new Set([
-  'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
-  'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
-  'DISCORD_CODING_STATUS_SHOW_PROJECT',
-  'DISCORD_CODING_STATUS_SHOW_MODEL',
-  'DISCORD_CODING_STATUS_SHOW_QUOTA',
-  'DISCORD_CODING_STATUS_SHOW_CONTEXT',
-  'DISCORD_CODING_STATUS_SHOW_PACKAGE'
-]);
-const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = [
-  {
-    key: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
-    label: 'Detail level',
-    defaultValue: DEFAULT_DETAIL_LEVEL,
-    choices: ['project', 'safe', 'full']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
-    label: 'Codex quota source',
-    defaultValue: DEFAULT_CODEX_QUOTA_SOURCE,
-    choices: ['oauth', 'auto', 'rpc', 'off']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
-    label: 'Activity style',
-    defaultValue: DEFAULT_ACTIVITY_STYLE,
-    choices: ['fun', 'normal', 'technical', 'minimal']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_PLAN_TEXT',
-    label: 'Plan override',
-    defaultValue: ''
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_LIMITS_TEXT',
-    label: 'Limits override',
-    defaultValue: ''
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_CODEX_AUTH_FILE',
-    label: 'Codex auth file',
-    defaultValue: DEFAULT_CODEX_AUTH_FILE
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_STATE_FILE',
-    label: 'State file',
-    defaultValue: DEFAULT_STATE_FILE
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_CLAUDE_IMAGE_KEY',
-    label: 'Claude image key',
-    defaultValue: ''
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_CODEX_IMAGE_KEY',
-    label: 'Codex image key',
-    defaultValue: ''
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
-    label: 'Prefer Codex CLI',
-    defaultValue: 'false',
-    choices: ['false', 'true']
-  }
-];
-const CONFIG_TUI_ITEMS: ConfigTuiItem[] = [
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
-    label: 'Activity',
-    section: 'Top line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_PROJECT',
-    label: 'Project + branch',
-    section: 'Top line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_MODEL',
-    label: 'Model + effort',
-    section: 'Bottom line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_QUOTA',
-    label: 'Plan + quota',
-    section: 'Bottom line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_CONTEXT',
-    label: 'Context usage',
-    section: 'Bottom line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_SHOW_PACKAGE',
-    label: 'Package (package.json)',
-    section: 'Bottom line',
-    kind: 'toggle'
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
-    label: 'Privacy preset',
-    section: 'Behavior',
-    kind: 'choice',
-    choices: ['safe', 'project', 'full']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
-    label: 'Codex quota source',
-    section: 'Behavior',
-    kind: 'choice',
-    choices: ['oauth', 'auto', 'rpc', 'off']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
-    label: 'Activity style',
-    section: 'Behavior',
-    kind: 'choice',
-    choices: ['fun', 'normal', 'technical', 'minimal']
-  },
-  {
-    key: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
-    label: 'Prefer Codex CLI',
-    section: 'Behavior',
-    kind: 'choice',
-    choices: ['false', 'true']
-  }
-];
+const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = createConfigEditorFields(DEFAULT_STATE_FILE);
 const CODEX_HOME = resolveHomePath(process.env.CODEX_HOME || '~/.codex');
 const CODEX_HOOKS_FILE = path.join(CODEX_HOME, 'hooks.json');
 const CLAUDE_CONFIG_DIR = resolveHomePath(process.env.CLAUDE_CONFIG_DIR || DEFAULT_CLAUDE_CONFIG_DIR);
@@ -397,15 +146,14 @@ const CODEX_HOOK_EVENTS = [
   'Stop'
 ] as const;
 
-loadEnvironmentFiles();
+loadEnvironmentFiles(CONFIG_FILE, LEGACY_CONFIG_FILE, process.cwd(), logError);
 
-const CODEX_CLIENT_ID = envValue('DISCORD_CODING_STATUS_CODEX_CLIENT_ID', DEFAULT_CODEX_CLIENT_ID).trim();
-const CLAUDE_CLIENT_ID = envValue('DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID', DEFAULT_CLAUDE_CLIENT_ID).trim();
+const DISCORD_APPLICATIONS = resolveDiscordApplications(toolProviders, envValue);
+const CODEX_CLIENT_ID = DISCORD_APPLICATIONS.get('codex')?.clientId || '';
+const CLAUDE_CLIENT_ID = DISCORD_APPLICATIONS.get('claude')?.clientId || '';
 const FALLBACK_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || '').trim();
 const LARGE_IMAGE_KEY = (process.env.DISCORD_LARGE_IMAGE_KEY || '').trim();
 const SMALL_IMAGE_KEY = (process.env.DISCORD_SMALL_IMAGE_KEY || '').trim();
-const CLAUDE_IMAGE_KEY = envValue('DISCORD_CODING_STATUS_CLAUDE_IMAGE_KEY').trim();
-const CODEX_IMAGE_KEY = envValue('DISCORD_CODING_STATUS_CODEX_IMAGE_KEY').trim();
 const DETAIL_LEVEL = normalizeDetailLevel(envValue('DISCORD_CODING_STATUS_DETAIL_LEVEL', DEFAULT_DETAIL_LEVEL));
 const PROJECT_NAME_OVERRIDE = envValue('DISCORD_CODING_STATUS_PROJECT_NAME').trim();
 const PACKAGE_NAME_OVERRIDE = envValue('DISCORD_CODING_STATUS_PACKAGE_NAME').trim();
@@ -455,8 +203,6 @@ const PROCESS_DETECTION_ENABLED = envValue(
 const DEBUG_ENABLED = envValue('DISCORD_CODING_STATUS_DEBUG').trim().toLowerCase() === '1';
 const RECONNECT_INTERVAL_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 10_000;
-const PS_TIMEOUT_MS = 5_000;
-const LSOF_TIMEOUT_MS = 2_000;
 const USAGE_TIMEOUT_MS = Number(envValue('DISCORD_CODING_STATUS_USAGE_TIMEOUT_MS', '8000'));
 const USAGE_REFRESH_INTERVAL_MS = Number(envValue('DISCORD_CODING_STATUS_USAGE_REFRESH_INTERVAL_MS', '60000'));
 const MAX_PRESENCE_TEXT_LENGTH = 128;
@@ -489,138 +235,6 @@ function getConfigDirectory(): string {
 
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), APP_ID);
 }
-
-function parseDotEnv(content: string): Record<string, string> {
-  const entries: Record<string, string> = {};
-
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#') || !line.includes('=')) {
-      continue;
-    }
-
-    const index = line.indexOf('=');
-    const key = line.slice(0, index).trim();
-    const value = line.slice(index + 1).trim().replace(/^["']|["']$/g, '');
-    if (key) {
-      entries[key] = value;
-    }
-  }
-
-  return entries;
-}
-
-function parseJsonConfig(content: string): Record<string, string> {
-  const parsed = JSON.parse(content) as unknown;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return {};
-  }
-
-  const entries: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!key || value === null || value === undefined) {
-      continue;
-    }
-
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      entries[JSON_CONFIG_ALIASES[key] || key] = String(value);
-    }
-  }
-
-  return entries;
-}
-
-function readJsonConfigFile(filePath: string): Record<string, string> {
-  if (!fs.existsSync(filePath)) {
-    return {};
-  }
-
-  try {
-    return parseJsonConfig(fs.readFileSync(filePath, 'utf8'));
-  } catch (error) {
-    logError(`Failed to read JSON config file ${filePath}`, error);
-    return {};
-  }
-}
-
-function applyConfigFile(filePath: string): void {
-  const entries = readJsonConfigFile(filePath);
-  for (const [key, value] of Object.entries(entries)) {
-    if (process.env[key] === undefined) {
-      process.env[key] = value;
-    }
-  }
-}
-
-function applyEnvFile(filePath: string): void {
-  if (!fs.existsSync(filePath)) {
-    return;
-  }
-
-  try {
-    const entries = parseDotEnv(fs.readFileSync(filePath, 'utf8'));
-    for (const [key, value] of Object.entries(entries)) {
-      if (process.env[key] === undefined) {
-        process.env[key] = value;
-      }
-    }
-  } catch (error) {
-    logError(`Failed to read env file ${filePath}`, error);
-  }
-}
-
-function loadEnvironmentFiles(): void {
-  applyConfigFile(CONFIG_FILE);
-  applyEnvFile(LEGACY_CONFIG_FILE);
-  applyEnvFile(path.join(process.cwd(), '.env'));
-}
-
-function envValue(name: string, fallback = ''): string {
-  const value = process.env[name];
-  if (value !== undefined) {
-    return value;
-  }
-
-  return fallback;
-}
-
-function envPathValue(name: string, fallback: string): string {
-  const value = envValue(name).trim();
-  return value || fallback;
-}
-
-function resolveHomePath(value: string): string {
-  if (value === '~') {
-    return os.homedir() || value;
-  }
-
-  if (value.startsWith('~/')) {
-    return path.join(os.homedir() || '', value.slice(2));
-  }
-
-  return path.resolve(value);
-}
-
-const TOOLS: Record<ToolKey, ToolDefinition> = {
-  claude: {
-    key: 'claude',
-    details: 'Using Claude Code',
-    state: 'AI coding session',
-    family: 'claude'
-  },
-  codexApp: {
-    key: 'codexApp',
-    details: 'Using Codex',
-    state: 'Codex App',
-    family: 'codex'
-  },
-  codexCli: {
-    key: 'codexCli',
-    details: 'Using Codex',
-    state: 'Codex CLI',
-    family: 'codex'
-  }
-};
 
 const STATUS_MESSAGES: Record<string, string[]> = {
   active: [
@@ -765,88 +379,6 @@ const cachedUsageTextByKey = new Map<string, { text: string | null; fetchedAt: n
 const usageRefreshesByKey = new Map<string, Promise<void>>();
 const claudeUsageRevisionBySession = new Map<string, number>();
 
-function normalizeDetailLevel(value: string): DetailLevel {
-  const normalized = String(value || '').trim().toLowerCase();
-
-  if (['safe', 'project', 'full'].includes(normalized)) {
-    return normalized as DetailLevel;
-  }
-
-  return 'safe';
-}
-
-function normalizeCodexQuotaSource(value: string): CodexQuotaSource {
-  const normalized = String(value || '').trim().toLowerCase();
-
-  if (['off', 'rpc', 'oauth', 'auto'].includes(normalized)) {
-    return normalized as CodexQuotaSource;
-  }
-
-  return 'oauth';
-}
-
-function normalizeActivityStyle(value: string): ActivityStyle {
-  const normalized = String(value || '').trim().toLowerCase();
-
-  if (['fun', 'normal', 'technical', 'minimal'].includes(normalized)) {
-    return normalized as ActivityStyle;
-  }
-
-  return DEFAULT_ACTIVITY_STYLE;
-}
-
-function parseBoolean(value: string): boolean {
-  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-}
-
-function parseOptionalBoolean(value: string | null | undefined): boolean | null {
-  if (value === null || value === undefined || !String(value).trim()) {
-    return null;
-  }
-
-  const normalized = String(value).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-    return true;
-  }
-
-  if (['0', 'false', 'no', 'off'].includes(normalized)) {
-    return false;
-  }
-
-  return null;
-}
-
-function displaySettingFromEnvironment(name: string, defaultValue: boolean): boolean {
-  return parseOptionalBoolean(process.env[name]) ?? defaultValue;
-}
-
-function defaultDisplayLayout(detailLevel: DetailLevel): DisplayLayout {
-  return {
-    activity: true,
-    project: detailLevel === 'project' || detailLevel === 'full',
-    model: true,
-    quota: detailLevel === 'project' || detailLevel === 'full',
-    context: false,
-    package: detailLevel === 'full'
-  };
-}
-
-function displayLayoutFromEntries(entries: Record<string, string>): DisplayLayout {
-  const detailLevel = normalizeDetailLevel(
-    entries.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL
-  );
-  const defaults = defaultDisplayLayout(detailLevel);
-
-  return {
-    activity: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_ACTIVITY) ?? defaults.activity,
-    project: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_PROJECT) ?? defaults.project,
-    model: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_MODEL) ?? defaults.model,
-    quota: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_QUOTA) ?? defaults.quota,
-    context: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_CONTEXT) ?? defaults.context,
-    package: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_PACKAGE) ?? defaults.package
-  };
-}
-
 function dim(value: string): string {
   return chalk.dim(value);
 }
@@ -869,10 +401,6 @@ function accent(value: string): string {
 
 function title(value: string): string {
   return chalk.bold.cyan(value);
-}
-
-function commandText(value: string): string {
-  return chalk.bold(value);
 }
 
 function shouldShowProject(): boolean {
@@ -1202,41 +730,6 @@ function cleanupStateSessions(state: HookStateFile, now = Date.now()): HookState
   );
 
   return { version: 1, sessions };
-}
-
-function parseArgs(argv: string[]): Record<string, string | boolean> {
-  const parsed: Record<string, string | boolean> = {};
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-
-    if (!arg.startsWith('--')) {
-      continue;
-    }
-
-    const withoutPrefix = arg.slice(2);
-    const equalsIndex = withoutPrefix.indexOf('=');
-
-    if (equalsIndex !== -1) {
-      parsed[withoutPrefix.slice(0, equalsIndex)] = withoutPrefix.slice(equalsIndex + 1);
-      continue;
-    }
-
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      parsed[withoutPrefix] = next;
-      index += 1;
-    } else {
-      parsed[withoutPrefix] = true;
-    }
-  }
-
-  return parsed;
-}
-
-function getArgString(args: Record<string, string | boolean>, name: string): string | null {
-  const value = args[name];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function readOptionalStdin(): string {
@@ -1574,11 +1067,16 @@ function findCodexAncestorPid(startPid = process.ppid): number {
   return currentPid;
 }
 
-function execFileSyncString(command: string, args: string[]): string {
-  const result = require('node:child_process').execFileSync(command, args, {
+function execFileSyncString(
+  command: string,
+  args: string[],
+  timeout = 1_000,
+  maxBuffer = 64 * 1024
+): string {
+  const result = execFileSync(command, args, {
     encoding: 'utf8',
-    timeout: 1000,
-    maxBuffer: 64 * 1024,
+    timeout,
+    maxBuffer,
     stdio: ['ignore', 'pipe', 'ignore']
   });
 
@@ -1877,108 +1375,6 @@ function getRuntimeScriptPath(baseDirectory = getPackageRoot()): string {
   return path.join(baseDirectory, 'dist', 'cli.js');
 }
 
-function findExecutable(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (trimmed.includes('/') || trimmed.includes('\\')) {
-    const resolved = resolveHomePath(trimmed);
-    return fs.existsSync(resolved) ? resolved : null;
-  }
-
-  try {
-    const output = execFileSyncString(process.platform === 'win32' ? 'where.exe' : 'which', [trimmed]);
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean) || null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function firstExistingPath(paths: string[]): string | null {
-  return paths.find((candidate) => fs.existsSync(candidate)) || null;
-}
-
-function detectCodexAppPath(): string | null {
-  if (process.platform === 'darwin') {
-    return firstExistingPath([
-      '/Applications/Codex.app',
-      path.join(os.homedir(), 'Applications', 'Codex.app')
-    ]);
-  }
-
-  return null;
-}
-
-function detectSetupTools(): SetupToolDetection[] {
-  const codexCliPath = findExecutable(CODEX_BIN);
-  const claudePath = findExecutable('claude') || findExecutable('claude-code');
-  const codexAppPath = detectCodexAppPath();
-
-  return [
-    {
-      key: 'codexCli',
-      name: 'Codex CLI',
-      detected: Boolean(codexCliPath),
-      detail: codexCliPath
-    },
-    {
-      key: 'codexApp',
-      name: 'Codex App',
-      detected: Boolean(codexAppPath),
-      detail: codexAppPath
-    },
-    {
-      key: 'codexHome',
-      name: 'Codex config',
-      detected: fs.existsSync(CODEX_HOME),
-      detail: fs.existsSync(CODEX_HOME) ? CODEX_HOME : null
-    },
-    {
-      key: 'claudeCode',
-      name: 'Claude Code',
-      detected: Boolean(claudePath),
-      detail: claudePath
-    }
-  ];
-}
-
-function detectedCodexForSetup(detections: SetupToolDetection[]): boolean {
-  return detections.some((item) => item.detected && item.key.startsWith('codex'));
-}
-
-function detectedClaudeForSetup(detections: SetupToolDetection[]): boolean {
-  return detections.some((item) => item.detected && item.key === 'claudeCode');
-}
-
-function shouldInstallCodexHooks(args: Record<string, string | boolean>, detections: SetupToolDetection[]): boolean {
-  if (args['no-codex-hooks'] || args.no_codex_hooks) {
-    return false;
-  }
-
-  if (args['codex-hooks'] || args.codex_hooks) {
-    return true;
-  }
-
-  return detectedCodexForSetup(detections);
-}
-
-function shouldInstallClaudeHooks(args: Record<string, string | boolean>, detections: SetupToolDetection[]): boolean {
-  if (args['no-claude-hooks'] || args.no_claude_hooks) {
-    return false;
-  }
-
-  if (args['claude-hooks'] || args.claude_hooks) {
-    return true;
-  }
-
-  return detectedClaudeForSetup(detections);
-}
-
 function printSetupDetections(detections: SetupToolDetection[]): void {
   console.log(title('Detected tools:'));
   for (const item of detections) {
@@ -2092,7 +1488,7 @@ function readSetupConfigEntries(): Record<string, string> {
 
   return {
     ...legacy,
-    ...readJsonConfigFile(CONFIG_FILE)
+    ...readJsonConfigFile(CONFIG_FILE, logError)
   };
 }
 
@@ -3283,81 +2679,6 @@ function printClaudeHooksStatus(): void {
   }, null, 2));
 }
 
-function printHelp(): void {
-  console.log(`${title(APP_TITLE)} ${dim(VERSION)}
-${dim('Local Discord Rich Presence for Codex and Claude Code.')}
-
-${chalk.bold('Usage:')}
-  discord-coding-status setup                 Install startup and start the daemon
-  discord-coding-status config                Open display TUI with live preview
-  discord-coding-status config --advanced     Edit advanced config prompts
-  discord-coding-status config --preview      Print the current two-line preview
-  discord-coding-status config --no-restart   Save without restarting the daemon
-  discord-coding-status daemon                Start the Discord Rich Presence daemon
-  discord-coding-status uninstall             Remove startup entry
-  discord-coding-status status                Print startup status
-  discord-coding-status setup-codex-hooks     Install Codex lifecycle hooks
-  discord-coding-status codex-hooks-status    Print Codex hook install status
-  discord-coding-status uninstall-codex-hooks Remove Codex lifecycle hooks
-  discord-coding-status setup-claude-hooks    Install Claude lifecycle hooks
-  discord-coding-status claude-hooks-status   Print Claude hook install status
-  discord-coding-status uninstall-claude-hooks Remove Claude lifecycle hooks
-  discord-coding-status hook --tool codex     Write or update a local session state
-  discord-coding-status codex-hook --event stop
-  discord-coding-status claude-hook --event Stop
-  discord-coding-status clear --session-id ID
-  discord-coding-status state
-  discord-coding-status quota
-  discord-coding-status quota --tool claude
-  discord-coding-status --version
-
-${chalk.bold('Default Discord Application IDs:')}
-  Codex: ${accent(CODEX_CLIENT_ID)}
-  Claude Code: ${accent(CLAUDE_CLIENT_ID)}
-
-${chalk.bold('Config file:')}
-  ${accent(CONFIG_FILE)}
-
-${chalk.bold('State file:')}
-  ${accent(STATE_FILE)}
-
-${chalk.bold('Project:')}
-  Author: ${accent(APP_AUTHOR)}
-  Website: ${accent(APP_WEBSITE)}
-  Repository: ${accent(APP_REPOSITORY)}
-  License: ${accent(APP_LICENSE)}
-
-${chalk.bold('Examples:')}
-  ${commandText('npx -y discord-coding-status@latest')}
-  ${commandText('npx -y discord-coding-status@latest setup')}
-  ${commandText('npx -y discord-coding-status@latest config')}
-  ${commandText('discord-coding-status config --preview')}
-  ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
-  ${commandText('npx -y discord-coding-status@latest setup --claude-hooks')}
-  ${commandText('discord-coding-status status')}
-  ${commandText('discord-coding-status daemon')}
-  ${commandText('DISCORD_CODING_STATUS_DETAIL_LEVEL=project discord-coding-status state')}
-  ${commandText('discord-coding-status quota --source oauth')}
-  ${commandText('discord-coding-status quota --tool claude')}
-`);
-}
-
-function runMetaCommand(command: string): boolean {
-  const normalized = command.trim().toLowerCase();
-
-  if (!normalized || ['help', '--help', '-h'].includes(normalized)) {
-    printHelp();
-    return true;
-  }
-
-  if (['version', '--version', '-v'].includes(normalized)) {
-    console.log(VERSION);
-    return true;
-  }
-
-  return false;
-}
-
 function runStateCommand(command: string): boolean {
   if (!['hook', 'codex-hook', 'claude-hook', 'clear', 'state'].includes(command)) {
     return false;
@@ -3413,7 +2734,10 @@ function runSetupCommand(command: string): boolean {
   }
 
   const args = parseArgs(process.argv.slice(3));
-  const detections = detectSetupTools();
+  const detections = detectSetupTools({
+    executableOverrides: { codexCli: [CODEX_BIN] },
+    pathOverrides: { codexHome: CODEX_HOME }
+  }, toolProviders);
 
   if (command === 'status' || command === 'startup-status') {
     printStartupStatus();
@@ -3428,8 +2752,8 @@ function runSetupCommand(command: string): boolean {
 
   const dryRun = Boolean(args['dry-run'] || args.dry_run);
   const startNow = !Boolean(args['no-start'] || args.no_start);
-  const installCodexHookSet = shouldInstallCodexHooks(args, detections);
-  const installClaudeHookSet = shouldInstallClaudeHooks(args, detections);
+  const installCodexHookSet = shouldInstallCodexHooks(args, detections, toolProviders);
+  const installClaudeHookSet = shouldInstallClaudeHooks(args, detections, toolProviders);
 
   if (dryRun) {
     console.log(JSON.stringify({
@@ -3477,14 +2801,14 @@ function runSetupCommand(command: string): boolean {
   if (codexHooks) {
     console.log(`${chalk.bold('Codex hooks:')} ${success(`${codexHooks.installed} installed`)} in ${accent(codexHooks.hooksFile)}`);
     console.log(warning('Open Codex and run `/hooks` once to review and trust the new hooks.'));
-  } else if (detectedCodexForSetup(detections)) {
+  } else if (detectedCodexForSetup(detections, toolProviders)) {
     console.log(warning('Codex hooks skipped by --no-codex-hooks.'));
   } else {
     console.log(dim('Codex hooks skipped because Codex was not detected.'));
   }
   if (claudeHooks) {
     console.log(`${chalk.bold('Claude hooks:')} ${success(`${claudeHooks.installed} installed`)} in ${accent(claudeHooks.settingsFile)}`);
-  } else if (detectedClaudeForSetup(detections)) {
+  } else if (detectedClaudeForSetup(detections, toolProviders)) {
     console.log(warning('Claude hooks skipped by --no-claude-hooks.'));
   } else {
     console.log(dim('Claude hooks skipped because Claude Code was not detected.'));
@@ -3583,7 +2907,7 @@ async function runQuotaCommand(command: string): Promise<boolean> {
   }
 
   const source = normalizeCodexQuotaSource(getArgString(args, 'source') || CODEX_QUOTA_SOURCE);
-  const quotaText = await getNativeCodexQuotaText({ ...TOOLS.codexCli }, source);
+  const quotaText = await getNativeCodexQuotaText({ ...requireToolPresence('codexCli') }, source);
 
   if (!quotaText) {
     console.error(danger('Codex quota unavailable. Try --source oauth, --source rpc, or DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE=auto.'));
@@ -3690,17 +3014,8 @@ function toolFamilyForTool(tool: ActiveTool | null | undefined): ToolFamily {
 }
 
 function clientIdForTool(tool: ActiveTool): string | null {
-  const family = toolFamilyForTool(tool);
-
-  if (family === 'claude') {
-    return CLAUDE_CLIENT_ID || FALLBACK_CLIENT_ID || null;
-  }
-
-  if (family === 'codex') {
-    return CODEX_CLIENT_ID || FALLBACK_CLIENT_ID || null;
-  }
-
-  return FALLBACK_CLIENT_ID || null;
+  const application = discordApplicationForTool(tool, toolProviders, DISCORD_APPLICATIONS);
+  return application?.clientId || FALLBACK_CLIENT_ID || null;
 }
 
 function isCodexTool(tool: ActiveTool | null | undefined): boolean {
@@ -4573,10 +3888,11 @@ function logError(message: string, error?: unknown): void {
 
 function validateEnvironment(): void {
   const ids = [
-    ['DISCORD_CODING_STATUS_CODEX_CLIENT_ID', CODEX_CLIENT_ID],
-    ['DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID', CLAUDE_CLIENT_ID],
-    ['DISCORD_CLIENT_ID', FALLBACK_CLIENT_ID]
-  ] as const;
+    ...[...DISCORD_APPLICATIONS.values()].map(
+      (application) => [application.clientIdEnvironment, application.clientId] as const
+    ),
+    ['DISCORD_CLIENT_ID', FALLBACK_CLIENT_ID] as const
+  ];
 
   for (const [name, value] of ids) {
     if (!value) {
@@ -4621,15 +3937,9 @@ function rpcStateForClientId(clientId: string): RpcConnectionState {
 }
 
 function labelForClientId(clientId: string): string {
-  if (clientId === CLAUDE_CLIENT_ID) {
-    return 'Claude Code';
-  }
-
-  if (clientId === CODEX_CLIENT_ID) {
-    return 'Codex';
-  }
-
-  return clientId;
+  return [...DISCORD_APPLICATIONS.values()].find(
+    (application) => application.clientId === clientId
+  )?.label || clientId;
 }
 
 function cancelReconnect(state: RpcConnectionState): void {
@@ -4744,199 +4054,6 @@ async function connectToDiscord(clientId: string): Promise<void> {
   return state.connecting;
 }
 
-async function getProcessList(): Promise<ProcessInfo[]> {
-  if (process.platform === 'win32') {
-    return getWindowsProcessList();
-  }
-
-  const { stdout } = await execFileAsync('ps', ['ax', '-o', 'pid=,comm=,args='], {
-    timeout: PS_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024
-  }) as { stdout: string };
-
-  return stdout
-    .split('\n')
-    .map(parseProcessLine)
-    .filter((processInfo): processInfo is ProcessInfo => Boolean(processInfo));
-}
-
-async function getWindowsProcessList(): Promise<ProcessInfo[]> {
-  const command = [
-    '@(Get-CimInstance Win32_Process |',
-    'Select-Object ProcessId,ExecutablePath,CommandLine) |',
-    'ConvertTo-Json -Compress'
-  ].join(' ');
-  const { stdout } = await execFileAsync('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    command
-  ], {
-    timeout: PS_TIMEOUT_MS,
-    maxBuffer: 4 * 1024 * 1024
-  }) as { stdout: string };
-
-  if (!stdout.trim()) {
-    return [];
-  }
-
-  const parsed = JSON.parse(stdout) as unknown;
-  const rows = Array.isArray(parsed) ? parsed : [parsed];
-
-  return rows
-    .map((row): ProcessInfo | null => {
-      const record = asRecord(row);
-      const pid = extractNumberLike(record?.ProcessId);
-      if (pid === null) {
-        return null;
-      }
-
-      const commandLine = extractString(record?.CommandLine);
-      const executablePath = extractString(record?.ExecutablePath);
-      const line = [executablePath, commandLine].filter(Boolean).join(' ');
-
-      if (!line) {
-        return null;
-      }
-
-      return {
-        pid,
-        line,
-        raw: line
-      };
-    })
-    .filter((processInfo): processInfo is ProcessInfo => Boolean(processInfo));
-}
-
-function parseProcessLine(line: string): ProcessInfo | null {
-  const trimmed = line.trim();
-  const match = trimmed.match(/^(\d+)\s+(.+)$/);
-
-  if (!match) {
-    return null;
-  }
-
-  return {
-    pid: Number(match[1]),
-    line: match[2],
-    raw: trimmed
-  };
-}
-
-function getProcessText(processInfo: ProcessInfo | string | null | undefined): string {
-  if (typeof processInfo === 'string') {
-    return processInfo;
-  }
-
-  return processInfo && processInfo.line ? processInfo.line : '';
-}
-
-function normalizeProcessLine(line: ProcessInfo | string): string {
-  return getProcessText(line).toLowerCase().replace(/\s+/g, ' ');
-}
-
-function splitProcessLine(line: ProcessInfo | string): { command: string; args: string } {
-  const normalized = normalizeProcessLine(line);
-  const match = normalized.match(/^(\S+)\s+(.*)$/);
-
-  if (!match) {
-    return { command: normalized, args: '' };
-  }
-
-  return { command: match[1], args: match[2] };
-}
-
-function isIgnoredProcess(line: ProcessInfo | string): boolean {
-  const normalized = normalizeProcessLine(line);
-
-  return (
-    normalized.includes('discord-coding-status.js') ||
-    normalized.includes('discord-coding-status.ts') ||
-    normalized.includes('grep ') ||
-    normalized.includes(' ps ') ||
-    normalized.includes('/ps ') ||
-    normalized.includes('discord helper')
-  );
-}
-
-function hasClaudeCodeProcess(line: ProcessInfo | string): boolean {
-  const normalized = normalizeProcessLine(line);
-
-  // Heuristic: users may install Claude Code as `claude`, `claude-code`,
-  // or run it through a package manager wrapper. Adjust here if needed.
-  return (
-    /\bclaude(?:-code)?\b/.test(normalized) ||
-    normalized.includes('/claude-code') ||
-    normalized.includes('/claude ')
-  );
-}
-
-function hasCodexAppProcess(line: ProcessInfo | string): boolean {
-  const normalized = normalizeProcessLine(line);
-
-  return (
-    normalized.includes('codex.app') ||
-    normalized.includes('/codex.app/') ||
-    normalized.includes('codex app')
-  );
-}
-
-function hasCodexCliProcess(line: ProcessInfo | string): boolean {
-  const normalized = normalizeProcessLine(line);
-  const { command, args } = splitProcessLine(line);
-
-  if (
-    hasCodexAppProcess(line) ||
-    normalized.includes('codex computer use.app')
-  ) {
-    return false;
-  }
-
-  // Heuristic: match an actual `codex` command or common package-manager
-  // wrappers invoking it, while ignored process lines remove this daemon,
-  // grep, and ps noise.
-  return (
-    command === 'codex' ||
-    command.endsWith('/codex') ||
-    /^codex(\s|$)/.test(args) ||
-    normalized.includes('/bin/codex') ||
-    /(^|\s)(bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(^|[\s/])(@[\w.-]+\/)?codex(?:\.js)?(\s|$)/.test(args)
-  );
-}
-
-function detectActiveTools(processLines: ProcessInfo[]): ActiveTool[] {
-  const candidates = processLines.filter((line) => !isIgnoredProcess(line));
-  const claudeProcess = candidates.find(hasClaudeCodeProcess);
-  const codexAppProcess = candidates.find(hasCodexAppProcess);
-  const codexCliProcess = candidates.find(hasCodexCliProcess);
-  const tools: ActiveTool[] = [];
-
-  if (claudeProcess) {
-    tools.push({ ...TOOLS.claude, processInfo: claudeProcess });
-  }
-
-  if (PREFER_CODEX_CLI && codexCliProcess) {
-    tools.push({ ...TOOLS.codexCli, processInfo: codexCliProcess });
-    return tools;
-  }
-
-  if (codexAppProcess) {
-    tools.push({ ...TOOLS.codexApp, processInfo: codexAppProcess });
-    return tools;
-  }
-
-  if (codexCliProcess) {
-    tools.push({ ...TOOLS.codexCli, processInfo: codexCliProcess });
-  }
-
-  return tools;
-}
-
-function detectActiveTool(processLines: ProcessInfo[]): ActiveTool | null {
-  return detectActiveTools(processLines)[0] || null;
-}
-
 function titleCase(value: string): string {
   return value
     .split(/[\s_-]+/)
@@ -4990,10 +4107,12 @@ function toolFromSession(session: HookSessionState): ActiveTool {
   const surface = session.surface.trim().toLowerCase();
   const status = statusLabel(session.status);
   const surfaceText = surfaceLabel(surface);
+  const provider = findToolProviderByAlias(tool, surface, toolProviders);
 
   if (tool === 'claude' || tool === 'claude-code') {
     return {
       key: `state:${session.session_id}`,
+      providerId: provider?.id || 'claudeCode',
       family: 'claude',
       details: sessionDetails(session.activity, 'Using Claude Code'),
       state: joinPresenceParts(['Claude Code', surfaceText, status]),
@@ -5015,9 +4134,34 @@ function toolFromSession(session: HookSessionState): ActiveTool {
   if (tool === 'codex') {
     return {
       key: `state:${session.session_id}`,
+      providerId: provider?.id || (surface === 'app' ? 'codexApp' : 'codexCli'),
       family: 'codex',
       details: sessionDetails(session.activity, 'Using Codex'),
       state: joinPresenceParts(['Codex', surfaceText, status]),
+      cwd: session.cwd,
+      sessionId: session.session_id,
+      startedAt: session.started_at || session.updated_at || null,
+      status: session.status,
+      activity: session.activity || null,
+      model: session.model || null,
+      effort: session.effort || null,
+      contextText: session.context || null,
+      projectName: session.project || null,
+      packageName: session.package || null
+    };
+  }
+
+  if (provider?.presence) {
+    return {
+      key: `state:${session.session_id}`,
+      providerId: provider.id,
+      family: provider.family,
+      details: sessionDetails(session.activity, provider.presence.details),
+      state: joinPresenceParts([
+        provider.discord?.label || provider.presence.state,
+        surfaceText,
+        status
+      ]),
       cwd: session.cwd,
       sessionId: session.session_id,
       startedAt: session.started_at || session.updated_at || null,
@@ -5116,31 +4260,6 @@ function mergeActiveTools(primary: ActiveTool[], fallback: ActiveTool[]): Active
   }
 
   return tools;
-}
-
-async function getCwdForProcess(processInfo: ProcessInfo | undefined): Promise<string | null> {
-  if (!processInfo || !processInfo.pid) {
-    return null;
-  }
-
-  if (process.platform === 'win32') {
-    return null;
-  }
-
-  try {
-    const { stdout } = await execFileAsync('lsof', ['-a', '-p', String(processInfo.pid), '-d', 'cwd', '-Fn'], {
-      timeout: LSOF_TIMEOUT_MS,
-      maxBuffer: 64 * 1024
-    }) as { stdout: string };
-
-    const cwdLine = stdout
-      .split('\n')
-      .find((line) => line.startsWith('n'));
-
-    return cwdLine ? cwdLine.slice(1).trim() : null;
-  } catch (_) {
-    return null;
-  }
 }
 
 function isLikelyAppInternalPath(directory: string | null | undefined): boolean {
@@ -5434,19 +4553,8 @@ function buildPresence(tool: ActiveTool, activityStartedAt: Date | null): Presen
 }
 
 function largeImageKeyForTool(tool: ActiveTool): string | null {
-  const text = [tool.key, tool.details, tool.state]
-    .join(' ')
-    .toLowerCase();
-
-  if (text.includes('claude')) {
-    return CLAUDE_IMAGE_KEY || LARGE_IMAGE_KEY || null;
-  }
-
-  if (text.includes('codex')) {
-    return CODEX_IMAGE_KEY || LARGE_IMAGE_KEY || null;
-  }
-
-  return LARGE_IMAGE_KEY || null;
+  const application = discordApplicationForTool(tool, toolProviders, DISCORD_APPLICATIONS);
+  return application?.imageKey || LARGE_IMAGE_KEY || null;
 }
 
 function activityStartDate(tool: ActiveTool): Date {
@@ -5567,7 +4675,9 @@ async function runLoopOnce(): Promise<void> {
       try {
         const stateTools = detectStateTools();
         const processTools = PROCESS_DETECTION_ENABLED
-          ? detectActiveTools(await getProcessList())
+          ? detectActiveTools(await getProcessList(), toolProviders, {
+            preferredSurfaceByFamily: PREFER_CODEX_CLI ? { codex: 'cli' } : {}
+          })
           : [];
         debugLog(`Loop found ${stateTools.length} state tool(s) and ${processTools.length} process tool(s).`);
         const activeTools = await enrichToolsForPresence(
@@ -5699,7 +4809,18 @@ process.on('uncaughtException', (error) => {
 const command = process.argv[2] || '';
 
 async function main(): Promise<void> {
-  if (runMetaCommand(command)) {
+  if (runMetaCommand(command, {
+    appTitle: APP_TITLE,
+    version: VERSION,
+    author: APP_AUTHOR,
+    website: APP_WEBSITE,
+    repository: APP_REPOSITORY,
+    license: APP_LICENSE,
+    codexClientId: CODEX_CLIENT_ID,
+    claudeClientId: CLAUDE_CLIENT_ID,
+    configFile: CONFIG_FILE,
+    stateFile: STATE_FILE
+  })) {
     process.exit(process.exitCode || 0);
   }
 
