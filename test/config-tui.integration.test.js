@@ -13,7 +13,8 @@ test('config preview reflects persisted display visibility controls', async (t) 
   const { directory, env: baseEnv } = createTestEnvironment(t);
   const env = {
     ...baseEnv,
-    HOME: directory
+    HOME: directory,
+    USERPROFILE: directory
   };
   const configDirectory = path.join(directory, 'discord-coding-status');
   fs.mkdirSync(configDirectory, { recursive: true });
