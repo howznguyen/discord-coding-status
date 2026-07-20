@@ -8,6 +8,10 @@ This project follows semantic versioning once tagged releases begin.
 
 - Added native Claude Code raw-model detection, managed lifecycle hooks, and subscription OAuth plan/5-hour/weekly quota with strict custom-provider isolation.
 - Added `quota --tool claude` plus Claude hook install/status/disable/uninstall commands, preserving the existing Codex CLI contracts.
+- Added a full-screen config TUI with live two-line Discord preview and independent visibility controls for activity, project, model/effort, quota, context, and package blocks.
+- Added `config --preview` for non-interactive preview output and retained the prompt-based editor under `config --advanced`.
+- Added `fun`, `normal`, `technical`, and `minimal` activity styles plus an optional sanitized context-usage display block.
+- Made config save/reset restart managed macOS and Windows daemons automatically, with `--no-restart` as an opt-out.
 
 ## [1.1.0] - 2026-07-15
 

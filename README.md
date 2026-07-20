@@ -161,11 +161,11 @@ Usage percentages are shown as **remaining** quota. Codex window labels come fro
 
 ### Detail levels
 
-| Level | Activity | Project + branch | Quota | Package name |
-| --- | --- | --- | --- | --- |
-| `safe` | Yes | No | No | No |
-| `project` (default) | Yes | Yes | Yes | No |
-| `full` | Yes | Yes | Yes | Yes |
+| Level | Activity | Project + branch | Model + effort | Quota | Context | Package name |
+| --- | --- | --- | --- | --- | --- | --- |
+| `safe` | Yes | No | Yes | No | No | No |
+| `project` (default) | Yes | Yes | Yes | Yes | No | No |
+| `full` | Yes | Yes | Yes | Yes | No | Yes |
 
 Project values are sanitized before being sent to Discord. Full filesystem paths are not used as Rich Presence text.
 
@@ -183,12 +183,41 @@ Most users can keep the default `{}`. Edit configuration interactively with:
 npx discord-coding-status config
 ```
 
-Press Enter to keep a value or enter `-` to clear an override. For scripts:
+The full-screen terminal editor shows a live two-line preview matching Discord's
+`details` and `state` rows. Use the arrow keys to move, Space or Enter to toggle a
+block, Left/Right to change a choice, `S` to save, and `Q` to cancel.
+
+The available display blocks are:
+
+- Top line: activity and project + branch.
+- Bottom line: model + reasoning effort, plan + quota, context usage, and package name.
+
+Activity text supports four styles selected directly in the TUI:
+
+| Style | Example |
+| --- | --- |
+| `fun` (default) | `Bash survived the assignment` |
+| `normal` | `Using Bash` |
+| `technical` | `Running npm test` |
+| `minimal` | `Working` |
+
+Context is optional and fail-closed: it appears only when a hook supplies a numeric
+metric such as `42%` or `128k / 256k`. Free-form context text is discarded so prompt
+or transcript content cannot become Discord activity.
+
+Press `A` from the TUI, or run `config --advanced`, to edit path, text, and image
+overrides with the original prompt-based editor. For scripts and quick inspection:
 
 ```sh
 npx discord-coding-status config --show
+npx discord-coding-status config --preview
 npx discord-coding-status config --reset
 ```
+
+Saving or resetting config automatically restarts a managed macOS LaunchAgent or
+Windows Scheduled Task, so changes become active immediately. Add `--no-restart`
+to skip that behavior. Linux and manually started daemons must still be restarted
+through their external service manager or terminal session.
 
 Example:
 
@@ -196,6 +225,13 @@ Example:
 {
   "detailLevel": "project",
   "quotaSource": "oauth",
+  "activityStyle": "normal",
+  "showActivity": true,
+  "showProject": true,
+  "showModel": true,
+  "showQuota": true,
+  "showContext": false,
+  "showPackage": false,
   "codexAuthFile": "~/.codex/auth.json",
   "preferCodexCli": false
 }
@@ -207,6 +243,13 @@ Example:
 | --- | --- | --- |
 | `detailLevel` | `project` | Select `safe`, `project`, or `full` presence detail. |
 | `quotaSource` | `oauth` | Select `oauth`, `rpc`, `auto`, or `off`. |
+| `activityStyle` | `fun` | Select `fun`, `normal`, `technical`, or `minimal` activity text. |
+| `showActivity` | `true` | Show activity on the top line. |
+| `showProject` | preset | Show project and branch on the top line. |
+| `showModel` | `true` | Show model and reasoning effort on the bottom line. |
+| `showQuota` | preset | Show plan and quota on the bottom line. |
+| `showContext` | `false` | Show sanitized numeric context usage on the bottom line when available. |
+| `showPackage` | preset | Show package name on the bottom line. |
 | `codexAuthFile` | `~/.codex/auth.json` | Override the Codex OAuth credential file. |
 | `stateFile` | `~/discord-coding-status/states.json` | Override local hook/runtime state storage. |
 | `planText` | - | Override the displayed plan text. |
@@ -326,7 +369,10 @@ Concurrent hook writes use a lock plus atomic file replacement so burst updates 
 
 | Command | Description |
 | --- | --- |
-| `config` | Edit the JSON configuration interactively. |
+| `setup` | Install the runtime/startup entry, start the daemon, and auto-install detected Codex and Claude hooks. |
+| `config` | Open the display TUI with a live two-line Discord preview. |
+| `config --advanced` | Edit advanced path, text, and image overrides with prompts. |
+| `config --preview` | Print the current two-line preview without opening the TUI. |
 | `config --no-restart` | Save config without restarting a managed daemon. |
 | `daemon` | Run the Rich Presence daemon in the foreground. |
 | `status` | Print startup installation paths and status as JSON. |

@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const readlineCore = require('node:readline') as typeof import('node:readline');
 const readline = require('node:readline/promises') as typeof import('node:readline/promises');
 const { exec, execFile, execFileSync, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -31,6 +32,7 @@ const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 type DetailLevel = 'safe' | 'project' | 'full';
+type ActivityStyle = 'fun' | 'normal' | 'technical' | 'minimal';
 type ToolKey = 'claude' | 'codexApp' | 'codexCli';
 type ToolFamily = 'claude' | 'codex' | 'other';
 
@@ -81,8 +83,8 @@ interface RichStateParts {
 }
 
 interface PresencePayload {
-  details: string;
-  state: string;
+  details?: string;
+  state?: string;
   startTimestamp: Date;
   instance: false;
   largeImageKey?: string;
@@ -167,6 +169,42 @@ interface ConfigEditorField {
   choices?: string[];
 }
 
+interface DisplayLayout {
+  activity: boolean;
+  project: boolean;
+  model: boolean;
+  quota: boolean;
+  context: boolean;
+  package: boolean;
+}
+
+interface ConfigPreviewSamples {
+  activity: string;
+  project: string;
+  model: string;
+  quota: string;
+  context: string;
+  package: string;
+}
+
+interface ConfigTuiItem {
+  key: string;
+  label: string;
+  section: 'Top line' | 'Bottom line' | 'Behavior';
+  kind: 'toggle' | 'choice';
+  choices?: string[];
+}
+
+interface ConfigTuiResult {
+  action: 'save' | 'advanced' | 'cancel';
+  entries: Record<string, string>;
+}
+
+interface DaemonRefreshResult {
+  status: 'restarted' | 'not-installed' | 'unsupported' | 'failed' | 'skipped';
+  error?: string;
+}
+
 const APP_ID = 'discord-coding-status';
 const APP_TITLE = 'Discord Coding Status';
 const APP_AUTHOR = '@howznguyen';
@@ -186,6 +224,7 @@ const DEFAULT_DETAIL_LEVEL = 'project';
 const DEFAULT_CODEX_QUOTA_SOURCE = 'oauth';
 const DEFAULT_CODEX_AUTH_FILE = '~/.codex/auth.json';
 const DEFAULT_CLAUDE_CONFIG_DIR = '~/.claude';
+const DEFAULT_ACTIVITY_STYLE: ActivityStyle = 'fun';
 const JSON_CONFIG_ALIASES: Record<string, string> = {
   codexClientId: 'DISCORD_CODING_STATUS_CODEX_CLIENT_ID',
   claudeClientId: 'DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID',
@@ -200,11 +239,27 @@ const JSON_CONFIG_ALIASES: Record<string, string> = {
   smallImageKey: 'DISCORD_SMALL_IMAGE_KEY',
   planText: 'DISCORD_CODING_STATUS_PLAN_TEXT',
   limitsText: 'DISCORD_CODING_STATUS_LIMITS_TEXT',
-  preferCodexCli: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI'
+  preferCodexCli: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
+  showActivity: 'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
+  showProject: 'DISCORD_CODING_STATUS_SHOW_PROJECT',
+  showModel: 'DISCORD_CODING_STATUS_SHOW_MODEL',
+  showQuota: 'DISCORD_CODING_STATUS_SHOW_QUOTA',
+  showContext: 'DISCORD_CODING_STATUS_SHOW_CONTEXT',
+  activityStyle: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
+  showPackage: 'DISCORD_CODING_STATUS_SHOW_PACKAGE'
 };
 const ENV_CONFIG_ALIASES = Object.fromEntries(
   Object.entries(JSON_CONFIG_ALIASES).map(([alias, envName]) => [envName, alias])
 ) as Record<string, string>;
+const BOOLEAN_CONFIG_KEYS = new Set([
+  'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
+  'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
+  'DISCORD_CODING_STATUS_SHOW_PROJECT',
+  'DISCORD_CODING_STATUS_SHOW_MODEL',
+  'DISCORD_CODING_STATUS_SHOW_QUOTA',
+  'DISCORD_CODING_STATUS_SHOW_CONTEXT',
+  'DISCORD_CODING_STATUS_SHOW_PACKAGE'
+]);
 const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = [
   {
     key: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
@@ -217,6 +272,12 @@ const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = [
     label: 'Codex quota source',
     defaultValue: DEFAULT_CODEX_QUOTA_SOURCE,
     choices: ['oauth', 'auto', 'rpc', 'off']
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
+    label: 'Activity style',
+    defaultValue: DEFAULT_ACTIVITY_STYLE,
+    choices: ['fun', 'normal', 'technical', 'minimal']
   },
   {
     key: 'DISCORD_CODING_STATUS_PLAN_TEXT',
@@ -252,6 +313,72 @@ const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = [
     key: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
     label: 'Prefer Codex CLI',
     defaultValue: 'false',
+    choices: ['false', 'true']
+  }
+];
+const CONFIG_TUI_ITEMS: ConfigTuiItem[] = [
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
+    label: 'Activity',
+    section: 'Top line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_PROJECT',
+    label: 'Project + branch',
+    section: 'Top line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_MODEL',
+    label: 'Model + effort',
+    section: 'Bottom line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_QUOTA',
+    label: 'Plan + quota',
+    section: 'Bottom line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_CONTEXT',
+    label: 'Context usage',
+    section: 'Bottom line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_SHOW_PACKAGE',
+    label: 'Package (package.json)',
+    section: 'Bottom line',
+    kind: 'toggle'
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
+    label: 'Privacy preset',
+    section: 'Behavior',
+    kind: 'choice',
+    choices: ['safe', 'project', 'full']
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
+    label: 'Codex quota source',
+    section: 'Behavior',
+    kind: 'choice',
+    choices: ['oauth', 'auto', 'rpc', 'off']
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
+    label: 'Activity style',
+    section: 'Behavior',
+    kind: 'choice',
+    choices: ['fun', 'normal', 'technical', 'minimal']
+  },
+  {
+    key: 'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
+    label: 'Prefer Codex CLI',
+    section: 'Behavior',
+    kind: 'choice',
     choices: ['false', 'true']
   }
 ];
@@ -292,6 +419,24 @@ const CODEX_OAUTH_CLIENT_ID = envValue('DISCORD_CODING_STATUS_CODEX_OAUTH_CLIENT
 const PLAN_TEXT_OVERRIDE = envValue('DISCORD_CODING_STATUS_PLAN_TEXT').trim().replace(/\\\$/g, '$');
 const LIMITS_TEXT_OVERRIDE = envValue('DISCORD_CODING_STATUS_LIMITS_TEXT').trim();
 const PREFER_CODEX_CLI = parseBoolean(envValue('DISCORD_CODING_STATUS_PREFER_CODEX_CLI'));
+const ACTIVITY_STYLE = normalizeActivityStyle(
+  envValue('DISCORD_CODING_STATUS_ACTIVITY_STYLE', DEFAULT_ACTIVITY_STYLE)
+);
+const SHOW_ACTIVITY = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_ACTIVITY', true);
+const SHOW_PROJECT = displaySettingFromEnvironment(
+  'DISCORD_CODING_STATUS_SHOW_PROJECT',
+  DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full'
+);
+const SHOW_MODEL = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_MODEL', true);
+const SHOW_QUOTA = displaySettingFromEnvironment(
+  'DISCORD_CODING_STATUS_SHOW_QUOTA',
+  DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full'
+);
+const SHOW_CONTEXT = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_CONTEXT', false);
+const SHOW_PACKAGE = displaySettingFromEnvironment(
+  'DISCORD_CODING_STATUS_SHOW_PACKAGE',
+  DETAIL_LEVEL === 'full'
+);
 const STATE_FILE = path.resolve(resolveHomePath(envPathValue('DISCORD_CODING_STATUS_STATE_FILE', DEFAULT_STATE_FILE)));
 const STATE_MAX_AGE_MS = Number(envValue('DISCORD_CODING_STATUS_STATE_MAX_AGE_MS', String(15 * 60_000)));
 const STATE_LOCK_TIMEOUT_MS = Number(envValue('DISCORD_CODING_STATUS_STATE_LOCK_TIMEOUT_MS', '2000'));
@@ -640,8 +785,66 @@ function normalizeCodexQuotaSource(value: string): CodexQuotaSource {
   return 'oauth';
 }
 
+function normalizeActivityStyle(value: string): ActivityStyle {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (['fun', 'normal', 'technical', 'minimal'].includes(normalized)) {
+    return normalized as ActivityStyle;
+  }
+
+  return DEFAULT_ACTIVITY_STYLE;
+}
+
 function parseBoolean(value: string): boolean {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function parseOptionalBoolean(value: string | null | undefined): boolean | null {
+  if (value === null || value === undefined || !String(value).trim()) {
+    return null;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return null;
+}
+
+function displaySettingFromEnvironment(name: string, defaultValue: boolean): boolean {
+  return parseOptionalBoolean(process.env[name]) ?? defaultValue;
+}
+
+function defaultDisplayLayout(detailLevel: DetailLevel): DisplayLayout {
+  return {
+    activity: true,
+    project: detailLevel === 'project' || detailLevel === 'full',
+    model: true,
+    quota: detailLevel === 'project' || detailLevel === 'full',
+    context: false,
+    package: detailLevel === 'full'
+  };
+}
+
+function displayLayoutFromEntries(entries: Record<string, string>): DisplayLayout {
+  const detailLevel = normalizeDetailLevel(
+    entries.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL
+  );
+  const defaults = defaultDisplayLayout(detailLevel);
+
+  return {
+    activity: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_ACTIVITY) ?? defaults.activity,
+    project: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_PROJECT) ?? defaults.project,
+    model: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_MODEL) ?? defaults.model,
+    quota: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_QUOTA) ?? defaults.quota,
+    context: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_CONTEXT) ?? defaults.context,
+    package: parseOptionalBoolean(entries.DISCORD_CODING_STATUS_SHOW_PACKAGE) ?? defaults.package
+  };
 }
 
 function dim(value: string): string {
@@ -673,15 +876,15 @@ function commandText(value: string): string {
 }
 
 function shouldShowProject(): boolean {
-  return DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full';
+  return SHOW_PROJECT;
 }
 
 function shouldShowPackage(): boolean {
-  return DETAIL_LEVEL === 'full';
+  return SHOW_PACKAGE;
 }
 
 function shouldShowUsage(): boolean {
-  return DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full';
+  return SHOW_QUOTA;
 }
 
 function truncatePresenceText(value: string | null | undefined): string {
@@ -723,6 +926,25 @@ function sanitizePackageName(value: string | null | undefined): string | null {
   }
 
   return truncatePresenceText(text.replace(/[^\w .@/-]/g, ''));
+}
+
+function formatContextText(value: string | null | undefined): string | null {
+  const text = String(value || '')
+    .replace(/^(?:ctx|context)\s*[:=]?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const amount = '\\d+(?:\\.\\d+)?(?:%|[kKmMbB]?(?:\\s*(?:tok|tokens?))?)';
+  const metricPattern = new RegExp(`^${amount}(?:\\s*\\/\\s*${amount})?$`, 'i');
+  if (!metricPattern.test(text)) {
+    return null;
+  }
+
+  return truncatePresenceText(`ctx ${text}`);
 }
 
 function sanitizeBranchName(value: string | null | undefined): string | null {
@@ -817,6 +1039,60 @@ function statusLabel(value: string | null | undefined): string | null {
     .join(' ');
 
   return cleaned || null;
+}
+
+function styledStatusLabel(
+  value: string | null | undefined,
+  style: ActivityStyle = ACTIVITY_STYLE
+): string | null {
+  if (style === 'fun') {
+    return statusLabel(value);
+  }
+
+  const normalized = normalizeStatus(value);
+  if (style === 'minimal') {
+    if (normalized === 'thinking') {
+      return 'Thinking';
+    }
+    if (['waiting', 'waiting_input', 'waiting_approval'].includes(normalized)) {
+      return 'Waiting';
+    }
+    if (['idle', 'paused'].includes(normalized)) {
+      return 'Idle';
+    }
+    if (normalized === 'error') {
+      return 'Error';
+    }
+    return 'Working';
+  }
+
+  const labels: Record<string, string> = style === 'technical'
+    ? {
+        active: 'Active session',
+        running: 'Running',
+        thinking: 'Model thinking',
+        streaming: 'Streaming output',
+        waiting: 'Waiting',
+        waiting_input: 'Waiting for input',
+        waiting_approval: 'Permission requested',
+        idle: 'Session idle',
+        paused: 'Session paused',
+        error: 'Session error'
+      }
+    : {
+        active: 'Working',
+        running: 'Working',
+        thinking: 'Thinking',
+        streaming: 'Writing a response',
+        waiting: 'Waiting',
+        waiting_input: 'Waiting for input',
+        waiting_approval: 'Waiting for approval',
+        idle: 'Idle',
+        paused: 'Paused',
+        error: 'Handling an error'
+      };
+
+  return labels[normalized] || statusLabel(value);
 }
 
 function isTerminalStatus(value: string | null | undefined): boolean {
@@ -1114,10 +1390,68 @@ function pickHookActivity(key: string, messages: string[]): string {
   return pickTimedMessage(`hook:${key}`, messages);
 }
 
+function conventionalCodexHookActivity(
+  event: string,
+  toolName: string | null,
+  command: string | null,
+  style: Exclude<ActivityStyle, 'fun'>
+): string | null {
+  const normalized = event.trim().toLowerCase();
+
+  if (style === 'minimal') {
+    if (normalized === 'permissionrequest' || normalized === 'permission_request') {
+      return 'Waiting';
+    }
+    if (normalized === 'stop') {
+      return 'Idle';
+    }
+    if (normalized === 'sessionstart' || normalized === 'session_start') {
+      return 'Starting';
+    }
+    return 'Working';
+  }
+
+  if (normalized === 'permissionrequest' || normalized === 'permission_request') {
+    return style === 'technical' ? 'Permission requested' : 'Waiting for approval';
+  }
+
+  if (normalized === 'stop') {
+    return style === 'technical' ? 'Codex idle' : 'Waiting for input';
+  }
+
+  if (normalized === 'pretooluse' || normalized === 'pre_tool_use') {
+    if (style === 'technical') {
+      return command ? `Running ${command}` : (toolName ? `Running ${toolName}` : 'Tool running');
+    }
+    return toolName ? `Using ${toolName}` : 'Running a command';
+  }
+
+  if (normalized === 'posttooluse' || normalized === 'post_tool_use') {
+    if (style === 'technical') {
+      return toolName ? `Finished ${toolName}` : 'Tool finished';
+    }
+    return 'Command completed';
+  }
+
+  if (normalized === 'userpromptsubmit' || normalized === 'user_prompt_submit') {
+    return style === 'technical' ? 'Prompt submitted' : 'Processing prompt';
+  }
+
+  if (normalized === 'sessionstart' || normalized === 'session_start') {
+    return style === 'technical' ? 'Session started' : 'Starting Codex session';
+  }
+
+  return null;
+}
+
 function activityFromCodexHook(event: string, input: Record<string, unknown>): string | null {
   const normalized = event.trim().toLowerCase();
   const toolName = findStringDeep(input, ['tool_name', 'toolName', 'tool']);
   const command = safeCommandSummary(findStringDeep(input, ['command', 'cmd']));
+
+  if (ACTIVITY_STYLE !== 'fun') {
+    return conventionalCodexHookActivity(event, toolName, command, ACTIVITY_STYLE);
+  }
 
   if (normalized === 'permissionrequest' || normalized === 'permission_request') {
     return pickHookActivity('permission', [
@@ -1766,7 +2100,10 @@ function serializeJsonConfig(entries: Record<string, string>): string {
   const filtered = Object.fromEntries(
     Object.entries(entries)
       .filter(([, value]) => value !== '')
-      .map(([key, value]) => [ENV_CONFIG_ALIASES[key] || key, value])
+      .map(([key, value]) => {
+        const booleanValue = BOOLEAN_CONFIG_KEYS.has(key) ? parseOptionalBoolean(value) : null;
+        return [ENV_CONFIG_ALIASES[key] || key, booleanValue ?? value];
+      })
   );
 
   return `${JSON.stringify(filtered, null, 2)}\n`;
@@ -1791,9 +2128,25 @@ function setConfigIfPresent(config: Record<string, string>, existing: Record<str
   }
 }
 
+function setConfigBooleanIfCustom(
+  config: Record<string, string>,
+  entries: Record<string, string>,
+  key: string,
+  defaultValue: boolean
+): void {
+  const value = parseOptionalBoolean(entries[key]);
+  if (value !== null && value !== defaultValue) {
+    config[key] = String(value);
+  }
+}
+
 function compactConfigEntries(entries: Record<string, string>): Record<string, string> {
   const next: Record<string, string> = {};
   const fallbackClientId = String(entries.DISCORD_CLIENT_ID || '').trim();
+  const detailLevel = normalizeDetailLevel(
+    entries.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL
+  );
+  const displayDefaults = defaultDisplayLayout(detailLevel);
 
   setConfigIfCustom(
     next,
@@ -1810,7 +2163,7 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
   setConfigIfCustom(
     next,
     'DISCORD_CODING_STATUS_DETAIL_LEVEL',
-    normalizeDetailLevel(entries.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL),
+    detailLevel,
     DEFAULT_DETAIL_LEVEL
   );
   setConfigIfCustom(
@@ -1818,6 +2171,12 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
     'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
     normalizeCodexQuotaSource(entries.DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE || DEFAULT_CODEX_QUOTA_SOURCE),
     DEFAULT_CODEX_QUOTA_SOURCE
+  );
+  setConfigIfCustom(
+    next,
+    'DISCORD_CODING_STATUS_ACTIVITY_STYLE',
+    normalizeActivityStyle(entries.DISCORD_CODING_STATUS_ACTIVITY_STYLE || DEFAULT_ACTIVITY_STYLE),
+    DEFAULT_ACTIVITY_STYLE
   );
   setConfigIfCustom(
     next,
@@ -1852,6 +2211,43 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
     'DISCORD_CODING_STATUS_PREFER_CODEX_CLI',
     entries.DISCORD_CODING_STATUS_PREFER_CODEX_CLI,
     'false'
+  );
+
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_ACTIVITY',
+    displayDefaults.activity
+  );
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_PROJECT',
+    displayDefaults.project
+  );
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_MODEL',
+    displayDefaults.model
+  );
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_QUOTA',
+    displayDefaults.quota
+  );
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_CONTEXT',
+    displayDefaults.context
+  );
+  setConfigBooleanIfCustom(
+    next,
+    entries,
+    'DISCORD_CODING_STATUS_SHOW_PACKAGE',
+    displayDefaults.package
   );
 
   return next;
@@ -1930,7 +2326,7 @@ async function promptConfigField(
 }
 
 function printEffectiveConfig(entries: Record<string, string>): void {
-  console.log(title('Discord Coding Status config'));
+  console.log(title('Discord Coding Status advanced config'));
   console.log(`${chalk.bold('File:')} ${accent(CONFIG_FILE)}`);
   console.log(dim('Enter keeps the current/default value. Use "-" to clear an override.'));
   console.log('');
@@ -1945,32 +2341,314 @@ function printEffectiveConfig(entries: Record<string, string>): void {
   console.log('');
 }
 
-async function runConfigCommand(command: string): Promise<boolean> {
-  if (!['config', 'configure'].includes(command)) {
-    return false;
+function applyDisplayLayout(entries: Record<string, string>, layout: DisplayLayout): void {
+  entries.DISCORD_CODING_STATUS_SHOW_ACTIVITY = String(layout.activity);
+  entries.DISCORD_CODING_STATUS_SHOW_PROJECT = String(layout.project);
+  entries.DISCORD_CODING_STATUS_SHOW_MODEL = String(layout.model);
+  entries.DISCORD_CODING_STATUS_SHOW_QUOTA = String(layout.quota);
+  entries.DISCORD_CODING_STATUS_SHOW_CONTEXT = String(layout.context);
+  entries.DISCORD_CODING_STATUS_SHOW_PACKAGE = String(layout.package);
+}
+
+function initializeConfigTuiEntries(existing: Record<string, string>): Record<string, string> {
+  const next = { ...existing };
+  const detailLevel = normalizeDetailLevel(
+    existing.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL
+  );
+
+  next.DISCORD_CODING_STATUS_DETAIL_LEVEL = detailLevel;
+  next.DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE = normalizeCodexQuotaSource(
+    existing.DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE || DEFAULT_CODEX_QUOTA_SOURCE
+  );
+  next.DISCORD_CODING_STATUS_ACTIVITY_STYLE = normalizeActivityStyle(
+    existing.DISCORD_CODING_STATUS_ACTIVITY_STYLE || DEFAULT_ACTIVITY_STYLE
+  );
+  next.DISCORD_CODING_STATUS_PREFER_CODEX_CLI = String(
+    parseOptionalBoolean(existing.DISCORD_CODING_STATUS_PREFER_CODEX_CLI) ?? false
+  );
+  applyDisplayLayout(next, displayLayoutFromEntries(existing));
+  return next;
+}
+
+function latestConfigPreviewSession(): HookSessionState | null {
+  const sessions = Object.values(readStateFile().sessions)
+    .filter((session) => !isTerminalStatus(session.status))
+    .sort((left, right) => right.updated_at - left.updated_at);
+  return sessions[0] || null;
+}
+
+function createConfigPreviewSamples(): ConfigPreviewSamples {
+  const session = latestConfigPreviewSession();
+  const cwd = session?.cwd || process.cwd();
+  const packageInfo = readPackageInfo(cwd);
+  const projectName = sanitizeProjectName(session?.project)
+    || sanitizeProjectName(packageInfo?.root)
+    || sanitizeProjectName(cwd)
+    || 'my-project';
+  const branchName = getGitBranch(packageInfo?.root || cwd) || 'main';
+  const model = String(session?.model || 'gpt-5.6-sol').trim();
+  const effort = String(session?.effort || 'xhigh').trim();
+
+  return {
+    activity: 'Bash survived the assignment',
+    project: `${projectName} @ ${branchName}`,
+    model: effort ? `${model} · ${effort}` : model,
+    quota: 'Pro • 5h 82% • weekly 54%',
+    context: formatContextText(session?.context) || 'ctx 42%',
+    package: `pkg ${sanitizePackageName(session?.package) || packageInfo?.name || 'my-package'}`
+  };
+}
+
+function activityStylePreview(style: ActivityStyle, fallback: string): string {
+  if (style === 'normal') {
+    return 'Running a command';
   }
 
-  const args = parseArgs(process.argv.slice(3));
-  const existing = readSetupConfigEntries();
-
-  if (args.reset) {
-    fs.mkdirSync(USER_DATA_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, serializeJsonConfig({}));
-    console.log(success(`Reset config: ${CONFIG_FILE}`));
-    return true;
+  if (style === 'technical') {
+    return 'Running Bash';
   }
 
-  if (args.show || args.json) {
-    console.log(serializeJsonConfig(compactConfigEntries(existing)).trim());
-    return true;
+  if (style === 'minimal') {
+    return 'Working';
   }
 
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error(danger('Config editor requires an interactive terminal. Use `config --show` or `config --reset` in scripts.'));
-    process.exitCode = 1;
-    return true;
+  return fallback;
+}
+
+function configPreviewLines(
+  entries: Record<string, string>,
+  samples: ConfigPreviewSamples
+): { top: string; bottom: string } {
+  const layout = displayLayoutFromEntries(entries);
+  const activityStyle = normalizeActivityStyle(
+    entries.DISCORD_CODING_STATUS_ACTIVITY_STYLE || DEFAULT_ACTIVITY_STYLE
+  );
+  const quotaSource = normalizeCodexQuotaSource(
+    entries.DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE || DEFAULT_CODEX_QUOTA_SOURCE
+  );
+  const planOverride = String(entries.DISCORD_CODING_STATUS_PLAN_TEXT || '').trim();
+  const limitsOverride = String(entries.DISCORD_CODING_STATUS_LIMITS_TEXT || '').trim();
+  const quota = planOverride || limitsOverride
+    ? joinMetricParts([planOverride || 'Pro', limitsOverride || '5h 82% • weekly 54%'])
+    : (quotaSource === 'off' ? 'Codex quota disabled' : samples.quota);
+
+  return {
+    top: joinPresenceParts([
+      layout.activity ? activityStylePreview(activityStyle, samples.activity) : null,
+      layout.project ? samples.project : null
+    ]),
+    bottom: joinPresenceParts([
+      layout.model ? samples.model : null,
+      layout.quota ? quota : null,
+      layout.context ? samples.context : null,
+      layout.package ? samples.package : null
+    ])
+  };
+}
+
+function tuiChoiceValue(item: ConfigTuiItem, entries: Record<string, string>): string {
+  const choices = item.choices || [];
+  const value = String(entries[item.key] || '').trim();
+  return choices.includes(value) ? value : (choices[0] || value);
+}
+
+function truncateTerminalText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
   }
 
+  return maxLength > 3 ? `${value.slice(0, maxLength - 3)}...` : value.slice(0, maxLength);
+}
+
+function compactHomePath(value: string): string {
+  const home = os.homedir();
+  return home && value.startsWith(`${home}${path.sep}`)
+    ? `~${path.sep}${value.slice(home.length + 1)}`
+    : value;
+}
+
+function renderConfigTui(
+  entries: Record<string, string>,
+  samples: ConfigPreviewSamples,
+  selectedIndex: number,
+  notice: string
+): string {
+  const preview = configPreviewLines(entries, samples);
+  const terminalWidth = Math.max(48, process.stdout.columns || 100);
+  const previewWidth = Math.max(24, terminalWidth - 11);
+  const lines = [
+    title(`${APP_TITLE} · Display Config`),
+    dim(`File: ${truncateTerminalText(compactHomePath(CONFIG_FILE), terminalWidth - 6)}`),
+    '',
+    chalk.bold('LIVE PREVIEW') + dim('  sample data · Discord uses up to 128 characters per line'),
+    `  ${dim('Top   ')} ${preview.top ? truncateTerminalText(preview.top, previewWidth) : dim('(hidden)')}`,
+    `  ${dim('Bottom')} ${preview.bottom ? truncateTerminalText(preview.bottom, previewWidth) : dim('(hidden)')}`,
+    ''
+  ];
+  let currentSection: ConfigTuiItem['section'] | null = null;
+
+  CONFIG_TUI_ITEMS.forEach((item, index) => {
+    if (item.section !== currentSection) {
+      currentSection = item.section;
+      lines.push(chalk.bold(item.section.toUpperCase()));
+    }
+
+    const selected = index === selectedIndex;
+    const pointer = selected ? accent('›') : ' ';
+    let control: string;
+    let controlLength: number;
+
+    if (item.kind === 'toggle') {
+      const enabled = parseOptionalBoolean(entries[item.key]) ?? false;
+      control = enabled ? success('[x]') : dim('[ ]');
+      controlLength = 3;
+    } else {
+      const value = tuiChoiceValue(item, entries);
+      control = `${dim('‹')} ${accent(value)} ${dim('›')}`;
+      controlLength = value.length + 4;
+    }
+
+    const label = selected ? chalk.bold(item.label) : item.label;
+    lines.push(` ${pointer} ${control}${' '.repeat(Math.max(1, 18 - controlLength))} ${label}`);
+  });
+
+  lines.push(
+    '',
+    notice ? warning(notice) : dim('Changes are written only when you save.'),
+    dim('↑/↓ move  ·  Space/Enter toggle  ·  ←/→ change'),
+    dim('R preset  ·  A advanced  ·  S save  ·  Q cancel')
+  );
+
+  return `\x1b[2J\x1b[H${lines.join('\n')}`;
+}
+
+function cycleConfigTuiChoice(
+  entries: Record<string, string>,
+  item: ConfigTuiItem,
+  direction: number
+): string {
+  const choices = item.choices || [];
+  if (!choices.length) {
+    return '';
+  }
+
+  const current = tuiChoiceValue(item, entries);
+  const currentIndex = Math.max(0, choices.indexOf(current));
+  const nextIndex = (currentIndex + direction + choices.length) % choices.length;
+  const value = choices[nextIndex];
+  entries[item.key] = value;
+
+  if (item.key === 'DISCORD_CODING_STATUS_DETAIL_LEVEL') {
+    applyDisplayLayout(entries, defaultDisplayLayout(normalizeDetailLevel(value)));
+    return `Applied the ${value} display preset.`;
+  }
+
+  return '';
+}
+
+async function runConfigTui(existing: Record<string, string>): Promise<ConfigTuiResult> {
+  const entries = initializeConfigTuiEntries(existing);
+  const samples = createConfigPreviewSamples();
+  const input = process.stdin;
+  const output = process.stdout;
+  const previousRawMode = Boolean(input.isRaw);
+  let selectedIndex = 0;
+  let notice = '';
+
+  readlineCore.emitKeypressEvents(input);
+
+  return new Promise((resolve) => {
+    let finished = false;
+
+    const render = () => {
+      output.write(renderConfigTui(entries, samples, selectedIndex, notice));
+    };
+    const finish = (action: ConfigTuiResult['action']) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      input.removeListener('keypress', onKeypress);
+      output.removeListener('resize', render);
+      if (typeof input.setRawMode === 'function') {
+        input.setRawMode(previousRawMode);
+      }
+      input.pause();
+      output.write('\x1b[?25h\x1b[?1049l');
+      resolve({ action, entries });
+    };
+    const activateSelected = () => {
+      const item = CONFIG_TUI_ITEMS[selectedIndex];
+      if (item.kind === 'toggle') {
+        const enabled = parseOptionalBoolean(entries[item.key]) ?? false;
+        entries[item.key] = String(!enabled);
+        notice = `${item.label} ${enabled ? 'hidden' : 'shown'}.`;
+      } else {
+        notice = cycleConfigTuiChoice(entries, item, 1);
+      }
+      render();
+    };
+    const onKeypress = (_character: string, key: { name?: string; ctrl?: boolean; shift?: boolean }) => {
+      const name = key?.name || '';
+
+      if ((key?.ctrl && name === 'c') || name === 'escape' || name === 'q') {
+        finish('cancel');
+        return;
+      }
+      if (name === 's') {
+        finish('save');
+        return;
+      }
+      if (name === 'a') {
+        finish('advanced');
+        return;
+      }
+      if (name === 'up' || name === 'k') {
+        selectedIndex = (selectedIndex - 1 + CONFIG_TUI_ITEMS.length) % CONFIG_TUI_ITEMS.length;
+        notice = '';
+        render();
+        return;
+      }
+      if (name === 'down' || name === 'j') {
+        selectedIndex = (selectedIndex + 1) % CONFIG_TUI_ITEMS.length;
+        notice = '';
+        render();
+        return;
+      }
+      if (name === 'left' || name === 'right') {
+        const item = CONFIG_TUI_ITEMS[selectedIndex];
+        if (item.kind === 'choice') {
+          notice = cycleConfigTuiChoice(entries, item, name === 'left' ? -1 : 1);
+          render();
+        }
+        return;
+      }
+      if (name === 'r') {
+        const detailLevel = normalizeDetailLevel(
+          entries.DISCORD_CODING_STATUS_DETAIL_LEVEL || DEFAULT_DETAIL_LEVEL
+        );
+        applyDisplayLayout(entries, defaultDisplayLayout(detailLevel));
+        notice = `Restored the ${detailLevel} display preset.`;
+        render();
+        return;
+      }
+      if (name === 'space' || name === 'return') {
+        activateSelected();
+      }
+    };
+
+    input.on('keypress', onKeypress);
+    output.on('resize', render);
+    if (typeof input.setRawMode === 'function') {
+      input.setRawMode(true);
+    }
+    input.resume();
+    output.write('\x1b[?1049h\x1b[?25l');
+    render();
+  });
+}
+
+async function runAdvancedConfigEditor(existing: Record<string, string>): Promise<Record<string, string>> {
   printEffectiveConfig(existing);
 
   const rl = readline.createInterface({
@@ -1992,10 +2670,155 @@ async function runConfigCommand(command: string): Promise<boolean> {
     rl.close();
   }
 
+  return next;
+}
+
+function getMacLaunchAgentPath(): string {
+  return path.join(os.homedir(), 'Library', 'LaunchAgents', `${MACOS_LAUNCH_AGENT_ID}.plist`);
+}
+
+function restartManagedDaemon(skipRestart = false): DaemonRefreshResult {
+  if (skipRestart) {
+    return { status: 'skipped' };
+  }
+
+  if (process.platform === 'darwin') {
+    const plistPath = getMacLaunchAgentPath();
+    if (!fs.existsSync(plistPath)) {
+      return { status: 'not-installed' };
+    }
+
+    const domain = `gui/${process.getuid ? process.getuid() : ''}`;
+    const serviceTarget = `${domain}/${MACOS_LAUNCH_AGENT_ID}`;
+    try {
+      execFileSync('launchctl', ['kickstart', '-k', serviceTarget], { stdio: 'ignore' });
+      return { status: 'restarted' };
+    } catch (_) {
+      try {
+        execFileSync('launchctl', ['bootstrap', domain, plistPath], { stdio: 'ignore' });
+        execFileSync('launchctl', ['kickstart', '-k', serviceTarget], { stdio: 'ignore' });
+        return { status: 'restarted' };
+      } catch (error) {
+        return {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    }
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('schtasks', ['/Query', '/TN', WINDOWS_TASK_NAME], { stdio: 'ignore' });
+    } catch (_) {
+      return { status: 'not-installed' };
+    }
+
+    try {
+      try {
+        execFileSync('schtasks', ['/End', '/TN', WINDOWS_TASK_NAME], { stdio: 'ignore' });
+      } catch (_) {
+        // The task may already be stopped.
+      }
+      execFileSync('schtasks', ['/Run', '/TN', WINDOWS_TASK_NAME], { stdio: 'ignore' });
+      return { status: 'restarted' };
+    } catch (error) {
+      return {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  return { status: 'unsupported' };
+}
+
+function printDaemonRefreshResult(result: DaemonRefreshResult): void {
+  if (result.status === 'restarted') {
+    console.log(success('Daemon restarted. Config is now active.'));
+    return;
+  }
+
+  if (result.status === 'skipped') {
+    console.log(dim('Daemon restart skipped by --no-restart.'));
+    return;
+  }
+
+  if (result.status === 'failed') {
+    console.log(warning('Config was saved, but the managed daemon could not be restarted. Restart it manually.'));
+    debugLog(`Managed daemon restart failed: ${result.error || 'unknown error'}`);
+    return;
+  }
+
+  if (result.status === 'not-installed') {
+    console.log(dim('No managed daemon installation was found. Restart a manually running daemon to apply changes.'));
+    return;
+  }
+
+  console.log(dim('Automatic daemon restart is unavailable on this platform. Restart the daemon manually.'));
+}
+
+function writeConfigEntries(
+  entries: Record<string, string>,
+  options: { action?: 'save' | 'reset'; skipRestart?: boolean } = {}
+): void {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, serializeJsonConfig(compactConfigEntries(next)));
-  console.log(success(`Saved config: ${CONFIG_FILE}`));
-  console.log(dim('Restart the daemon for config changes to take effect.'));
+  fs.writeFileSync(CONFIG_FILE, serializeJsonConfig(compactConfigEntries(entries)));
+  const verb = options.action === 'reset' ? 'Reset' : 'Saved';
+  console.log(success(`${verb} config: ${CONFIG_FILE}`));
+  printDaemonRefreshResult(restartManagedDaemon(Boolean(options.skipRestart)));
+}
+
+async function runConfigCommand(command: string): Promise<boolean> {
+  if (!['config', 'configure'].includes(command)) {
+    return false;
+  }
+
+  const args = parseArgs(process.argv.slice(3));
+  const existing = readSetupConfigEntries();
+  const skipRestart = Boolean(args['no-restart'] || args.no_restart);
+
+  if (args.reset) {
+    writeConfigEntries({}, { action: 'reset', skipRestart });
+    return true;
+  }
+
+  if (args.show || args.json) {
+    console.log(serializeJsonConfig(compactConfigEntries(existing)).trim());
+    return true;
+  }
+
+  if (args.preview) {
+    const preview = configPreviewLines(existing, createConfigPreviewSamples());
+    console.log(title(`${APP_TITLE} preview`));
+    console.log(`${chalk.bold('Top:')} ${preview.top || dim('(hidden)')}`);
+    console.log(`${chalk.bold('Bottom:')} ${preview.bottom || dim('(hidden)')}`);
+    return true;
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(danger('Config editor requires an interactive terminal. Use `config --show`, `config --preview`, or `config --reset` in scripts.'));
+    process.exitCode = 1;
+    return true;
+  }
+
+  if (args.advanced || args.prompts) {
+    writeConfigEntries(await runAdvancedConfigEditor(existing), { skipRestart });
+    return true;
+  }
+
+  const result = await runConfigTui(existing);
+  if (result.action === 'cancel') {
+    console.log(dim('Config unchanged.'));
+    return true;
+  }
+
+  if (result.action === 'advanced') {
+    writeConfigEntries(await runAdvancedConfigEditor(result.entries), { skipRestart });
+    return true;
+  }
+
+  writeConfigEntries(result.entries, { skipRestart });
   return true;
 }
 
@@ -2009,9 +2832,9 @@ function xmlEscape(value: string): string {
 }
 
 function installMacLaunchAgent(scriptPath: string, startNow: boolean): string {
-  const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+  const plistPath = getMacLaunchAgentPath();
+  const launchAgentsDir = path.dirname(plistPath);
   const logDir = getLogDirectory();
-  const plistPath = path.join(launchAgentsDir, `${MACOS_LAUNCH_AGENT_ID}.plist`);
   fs.mkdirSync(launchAgentsDir, { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
 
@@ -2115,7 +2938,7 @@ function installStartup(scriptPath: string, startNow: boolean): string {
 
 function uninstallStartup(purge: boolean): void {
   if (process.platform === 'darwin') {
-    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${MACOS_LAUNCH_AGENT_ID}.plist`);
+    const plistPath = getMacLaunchAgentPath();
     const domain = `gui/${process.getuid ? process.getuid() : ''}`;
     try {
       execFileSync('launchctl', ['bootout', domain, plistPath], { stdio: 'ignore' });
@@ -2142,7 +2965,7 @@ function uninstallStartup(purge: boolean): void {
 
 function printStartupStatus(): void {
   if (process.platform === 'darwin') {
-    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${MACOS_LAUNCH_AGENT_ID}.plist`);
+    const plistPath = getMacLaunchAgentPath();
     console.log(JSON.stringify({
       platform: 'macos',
       installed: fs.existsSync(plistPath),
@@ -2466,7 +3289,10 @@ ${dim('Local Discord Rich Presence for Codex and Claude Code.')}
 
 ${chalk.bold('Usage:')}
   discord-coding-status setup                 Install startup and start the daemon
-  discord-coding-status config                Edit config in the terminal
+  discord-coding-status config                Open display TUI with live preview
+  discord-coding-status config --advanced     Edit advanced config prompts
+  discord-coding-status config --preview      Print the current two-line preview
+  discord-coding-status config --no-restart   Save without restarting the daemon
   discord-coding-status daemon                Start the Discord Rich Presence daemon
   discord-coding-status uninstall             Remove startup entry
   discord-coding-status status                Print startup status
@@ -2505,6 +3331,7 @@ ${chalk.bold('Examples:')}
   ${commandText('npx -y discord-coding-status@latest')}
   ${commandText('npx -y discord-coding-status@latest setup')}
   ${commandText('npx -y discord-coding-status@latest config')}
+  ${commandText('discord-coding-status config --preview')}
   ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
   ${commandText('npx -y discord-coding-status@latest setup --claude-hooks')}
   ${commandText('discord-coding-status status')}
@@ -4520,7 +5347,7 @@ async function getPresenceMetadata(tool: ActiveTool): Promise<PresenceMetadata> 
 function activityTextForPresence(tool: ActiveTool): string {
   return truncatePresenceText(
     tool.activity
-      || statusLabel(tool.status)
+      || styledStatusLabel(tool.status)
       || tool.details
       || tool.state
   );
@@ -4553,17 +5380,20 @@ async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveToo
   const metadata = await getPresenceMetadata(tool);
   const activityText = activityTextForPresence(tool);
   const modelText = modelTextForPresence(tool);
-  const details = shouldShowProject()
-    ? joinPresenceParts([activityText, projectBranchText(metadata)]) || activityText
-    : activityText;
-  const fallbackState = joinPresenceParts([
-    toolFamilyForTool(tool) === 'codex' ? PLAN_TEXT_OVERRIDE || 'Codex quota unavailable' : tool.state,
-    metadata.packageName ? `pkg ${metadata.packageName}` : null
+  const contextText = formatContextText(tool.contextText);
+  const details = joinPresenceParts([
+    SHOW_ACTIVITY ? activityText : null,
+    SHOW_PROJECT ? projectBranchText(metadata) : null
   ]);
+  const quotaFallback = toolFamilyForTool(tool) === 'codex'
+    ? PLAN_TEXT_OVERRIDE || (CODEX_QUOTA_SOURCE === 'off' ? 'Codex quota disabled' : 'Codex quota unavailable')
+    : null;
   const state = joinPresenceParts([
-    modelText,
-    metadata.usageText || fallbackState || tool.state
-  ]) || fallbackState || tool.state;
+    SHOW_MODEL ? modelText : null,
+    SHOW_QUOTA ? metadata.usageText || quotaFallback : null,
+    SHOW_CONTEXT ? contextText : null,
+    SHOW_PACKAGE && metadata.packageName ? `pkg ${metadata.packageName}` : null
+  ]);
 
   return {
     ...tool,
@@ -4579,12 +5409,18 @@ async function enrichToolsForPresence(tools: ActiveTool[]): Promise<ActiveTool[]
 
 function buildPresence(tool: ActiveTool, activityStartedAt: Date | null): PresencePayload {
   const presence: PresencePayload = {
-    details: tool.details,
-    state: tool.state,
     startTimestamp: activityStartedAt || new Date(),
     instance: false
   };
   const largeImageKey = largeImageKeyForTool(tool);
+
+  if (tool.details) {
+    presence.details = tool.details;
+  }
+
+  if (tool.state) {
+    presence.state = tool.state;
+  }
 
   if (largeImageKey) {
     presence.largeImageKey = largeImageKey;

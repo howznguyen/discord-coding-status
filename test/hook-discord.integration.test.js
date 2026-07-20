@@ -107,3 +107,107 @@ test('Codex hook shows the active model and reasoning effort from transcript met
   assert.equal(state.sessions['model-effort-session'].effort, 'xhigh');
   assert.equal(daemon.output().stderr, '');
 });
+
+test('display layout can hide blocks while showing project, context, and package', async (t) => {
+  const { env, rpcLogFile } = createTestEnvironment(t, {
+    DISCORD_CODING_STATUS_SHOW_ACTIVITY: 'false',
+    DISCORD_CODING_STATUS_SHOW_PROJECT: 'true',
+    DISCORD_CODING_STATUS_SHOW_MODEL: 'false',
+    DISCORD_CODING_STATUS_SHOW_QUOTA: 'false',
+    DISCORD_CODING_STATUS_SHOW_CONTEXT: 'true',
+    DISCORD_CODING_STATUS_SHOW_PACKAGE: 'true'
+  });
+  const daemon = startDaemon(t, env);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  await runCli([
+    'hook',
+    '--tool', 'codex',
+    '--surface', 'cli',
+    '--status', 'running',
+    '--session-id', 'display-layout-session',
+    '--cwd', process.cwd(),
+    '--activity', 'This activity must be hidden',
+    '--project', 'display-project',
+    '--package', 'display-package',
+    '--model', 'gpt-hidden',
+    '--effort', 'xhigh',
+    '--context', '42%'
+  ], env);
+
+  const event = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (candidate) => candidate.method === 'setActivity'
+        && candidate.activity.details.includes('display-project')
+    ),
+    'the custom display layout to reach Discord RPC'
+  );
+
+  assert.doesNotMatch(event.activity.details, /This activity must be hidden/);
+  assert.match(event.activity.state, /^ctx 42% \| pkg display-package$/);
+  assert.doesNotMatch(event.activity.state, /gpt-hidden|quota/i);
+  assert.equal(daemon.output().stderr, '');
+});
+
+test('normal activity style replaces humorous Codex hook messages', async (t) => {
+  const { env } = createTestEnvironment(t, {
+    DISCORD_CODING_STATUS_ACTIVITY_STYLE: 'normal'
+  });
+
+  await runCli(
+    ['codex-hook', '--event', 'PreToolUse'],
+    env,
+    15000,
+    JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      session_id: 'normal-activity-session',
+      cwd: process.cwd(),
+      tool_name: 'Bash'
+    })
+  );
+
+  const stateResult = await runCli(['state'], env);
+  const state = JSON.parse(stateResult.stdout);
+  assert.equal(state.sessions['normal-activity-session'].activity, 'Using Bash');
+});
+
+test('context display rejects free-form text instead of exposing it to Discord', async (t) => {
+  const { env, rpcLogFile } = createTestEnvironment(t, {
+    DISCORD_CODING_STATUS_SHOW_MODEL: 'false',
+    DISCORD_CODING_STATUS_SHOW_QUOTA: 'false',
+    DISCORD_CODING_STATUS_SHOW_CONTEXT: 'true',
+    DISCORD_CODING_STATUS_SHOW_PACKAGE: 'false'
+  });
+  const daemon = startDaemon(t, env);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  await runCli([
+    'hook',
+    '--tool', 'codex',
+    '--status', 'running',
+    '--session-id', 'private-context-session',
+    '--cwd', process.cwd(),
+    '--activity', 'Context privacy check',
+    '--context', 'secret prompt text 42%'
+  ], env);
+
+  const event = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (candidate) => candidate.method === 'setActivity'
+        && candidate.activity.details.includes('Context privacy check')
+    ),
+    'the sanitized context activity to reach Discord RPC'
+  );
+
+  assert.equal(event.activity.state, undefined);
+  assert.doesNotMatch(JSON.stringify(event.activity), /secret prompt text/);
+  assert.equal(daemon.output().stderr, '');
+});
