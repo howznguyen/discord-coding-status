@@ -6,6 +6,8 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-20
+
 - Added native Claude Code raw-model detection, managed lifecycle hooks, and subscription OAuth plan/5-hour/weekly quota with strict custom-provider isolation.
 - Added `quota --tool claude` plus Claude hook install/status/disable/uninstall commands, preserving the existing Codex CLI contracts.
 - Added a full-screen config TUI with live two-line Discord preview and independent visibility controls for activity, project, model/effort, quota, context, and package blocks.

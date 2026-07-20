@@ -12,6 +12,7 @@ const {
   startDaemon,
   waitFor
 } = require('./helpers');
+const { version: PACKAGE_VERSION } = require('../package.json');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'dist', 'cli.js');
@@ -117,7 +118,7 @@ test('quota --tool claude uses the fixed OAuth usage host and fails closed for A
     method: 'GET',
     hasBearerToken: true,
     beta: 'oauth-2025-04-20',
-    userAgent: 'claude-code/1.1.0 (discord-coding-status)'
+    userAgent: `claude-code/${PACKAGE_VERSION} (discord-coding-status)`
   }]);
 
   const ineligibleModes = [
