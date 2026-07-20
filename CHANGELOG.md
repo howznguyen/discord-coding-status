@@ -6,6 +6,12 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+- Added ChatGPT desktop (Codex) and Claude Desktop install/process detection on macOS and Windows, while keeping embedded app servers and the Claude Code URL handler separate from CLI detection.
+- Split command policy, platform adapters, core detection, and colocated domain contracts out of the CLI entrypoint; standardized source dependencies on TypeScript imports and added automated architecture-boundary coverage.
+- Cleaned `dist` before each build so moved modules cannot remain as stale files in published npm packages.
+- Added a capability-driven tool provider registry for process/setup/hook/Discord integration, with built-in Codex and Claude providers plus a tested fake OpenCode extension contract.
+- Added an approval-gated release-candidate workflow that builds a draft artifact before publishing npm and the GitHub Release together.
+
 ## [1.2.0] - 2026-07-20
 
 - Added native Claude Code raw-model detection, managed lifecycle hooks, and subscription OAuth plan/5-hour/weekly quota with strict custom-provider isolation.

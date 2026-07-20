@@ -60,16 +60,17 @@ The state file is watched for immediate changes. A 10-second process/polling loo
 | Tool | Activity source | Native quota | Discord identity |
 | --- | --- | --- | --- |
 | Codex CLI | Lifecycle hooks + process fallback | OAuth or app-server RPC | Codex |
-| Codex App | Process detection | OAuth or app-server RPC | Codex |
+| Codex in ChatGPT desktop | Process detection | OAuth or app-server RPC | Codex |
 | Claude Code | Lifecycle hooks + process fallback | Subscription OAuth | Claude Code |
+| Claude Desktop | Process detection | — | Claude Code |
 
-If Codex and Claude Code are active together, the daemon updates both RPC clients. Discord Desktop decides which activities are visible in its interface.
+If Codex and Claude are active together, the daemon updates both RPC clients. Discord Desktop decides which activities are visible in its interface. Claude Desktop detection is independent from Claude Code hooks and subscription quota.
 
 ## Requirements
 
 - Node.js 18 or newer
 - Discord Desktop, signed in and running
-- Codex CLI, Codex App, or Claude Code
+- Codex CLI, ChatGPT desktop with Codex, Claude Code, or Claude Desktop
 - macOS or Windows for automatic startup installation
 
 Linux can run the daemon manually, but `setup` and `uninstall` currently manage startup only on macOS and Windows.
@@ -90,10 +91,10 @@ npx -y discord-coding-status@latest setup
 
 Setup performs four actions:
 
-1. Detects local Codex and Claude Code installations.
+1. Detects local Codex/ChatGPT and Claude CLI or desktop installations.
 2. Copies a self-contained runtime into your user application-data directory.
 3. Installs and starts a macOS LaunchAgent or Windows Scheduled Task.
-4. Installs managed Codex and Claude lifecycle hooks automatically when each tool is detected.
+4. Installs managed Codex hooks when Codex is detected and Claude hooks when Claude Code is detected.
 
 Force hook installation if a tool was not detected:
 
@@ -535,6 +536,23 @@ npx . setup --dry-run
 
 ## Development
 
+Detection code is split by responsibility:
+
+| Module | Responsibility |
+| --- | --- |
+| `src/cli.ts` | CLI commands and daemon orchestration |
+| `src/commands/` | Command handlers and command-specific policy/types |
+| `src/core/` | Pure tool, detection, hook, presence, and quota contracts/logic |
+| `src/providers/` | Capability declarations and the built-in provider registry |
+| `src/adapters/system/installed-tools.ts` | Installed CLI/desktop discovery |
+| `src/adapters/system/processes.ts` | macOS/Windows process enumeration |
+| `src/core/detection/active-tools.ts` | Active-tool selection policy |
+| `src/core/detection/tool-detection.ts` | Pure Codex/Claude process classifiers |
+
+Dependencies point inward: commands and adapters may import core modules, while core modules do not import commands or platform adapters. Domain types live beside their owning feature instead of in a global types file.
+
+See [Adding a tool provider](./docs/adding-a-tool-provider.md) for the provider contract, supported installation probes, Discord environment conventions, and a complete extension example.
+
 ```sh
 npm ci
 npm test
@@ -551,12 +569,11 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for pull-request expectations and local
 
 ## Release
 
-The publish workflow runs for `v*` tags, tests and builds the package, then publishes to npm with provenance. Configure the repository secret `NPM_TOKEN`, then create a version tag:
+Configure the repository secret `NPM_TOKEN` and add yourself as a required reviewer for the `npm-production` GitHub Environment. Start **Actions → Release candidate to npm → Run workflow** with a semantic version such as `1.3.0`.
 
-```sh
-npm version patch
-git push --follow-tags
-```
+The workflow updates `package.json` and `package-lock.json`, runs the full test and package checks, commits and tags the version, uploads the package artifact, and creates a draft GitHub Release. It then waits at the `npm-production` approval gate. Nothing is published to npm or as a public GitHub Release before approval. After approval, the exact staged tarball is published to npm with provenance and the draft GitHub Release becomes public. A failed build or publish remains visible in GitHub Actions for retry and does not publish the GitHub Release.
+
+Stable releases publish under npm's `latest` dist-tag. Prereleases such as `v1.3.0-beta.1` publish under `next`.
 
 ## License
 
