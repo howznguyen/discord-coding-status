@@ -1,20 +1,36 @@
-name: Publish
+name: Release candidate to npm
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version to release, for example 1.3.0 or 1.3.0-beta.1
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
 jobs:
-  npm:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
+      package_name: ${{ steps.release.outputs.package_name }}
+      package_file: ${{ steps.package.outputs.package_file }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -26,13 +42,136 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare release version
+        id: release
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          version="${REQUESTED_VERSION#v}"
+          tag="v$version"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Version must use semantic versioning, for example 1.3.0 or 1.3.0-beta.1." >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag already exists: $tag" >&2
+            exit 1
+          fi
+
+          npm version "$version" --no-git-tag-version --allow-same-version
+
+          package_name="$(node -p "require('./package.json').name")"
+          published_version="$(npm view "$package_name@$version" version --json 2>/dev/null || true)"
+          published_version="$(printf '%s' "$published_version" | tr -d '\"[:space:]')"
+          if [[ "$published_version" == "$version" ]]; then
+            echo "$package_name@$version is already published on npm." >&2
+            exit 1
+          fi
+
+          npm_tag=latest
+          if [[ "$version" == *-* ]]; then
+            npm_tag=next
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+
       - name: Test
         run: npm test
 
-      - name: Build
-        run: npm run build
+      - name: Verify package contents
+        id: package
+        shell: bash
+        run: |
+          npm pack --json > npm-pack.json
+          package_file="$(node -p "require('./npm-pack.json')[0].filename")"
+          test -f "$package_file"
+          echo "package_file=$package_file" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-${{ steps.release.outputs.version }}
+          path: ${{ steps.package.outputs.package_file }}
+          if-no-files-found: error
+
+      - name: Commit version and push tag
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): $RELEASE_TAG"
+          fi
+
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+          git push --atomic origin "HEAD:refs/heads/$DEFAULT_BRANCH" "refs/tags/$RELEASE_TAG"
+
+      - name: Create draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          NPM_TAG: ${{ steps.release.outputs.npm_tag }}
+          PACKAGE_FILE: ${{ steps.package.outputs.package_file }}
+        run: |
+          release_args=("$RELEASE_TAG" "$PACKAGE_FILE#npm package candidate" --draft --verify-tag --generate-notes --title "$RELEASE_TAG")
+          if [[ "$NPM_TAG" == next ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
+          gh release create "${release_args[@]}"
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: npm-production
+      url: https://www.npmjs.com/package/${{ needs.prepare.outputs.package_name }}/v/${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Download release package
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package-${{ needs.prepare.outputs.version }}
+          path: release-package
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          package_files=(release-package/*.tgz)
+          if [[ "${#package_files[@]}" -ne 1 || ! -f "${package_files[0]}" ]]; then
+            echo "Expected exactly one npm package artifact." >&2
+            exit 1
+          fi
+
+          published_version="$(npm view "$PACKAGE_NAME@$VERSION" version --json 2>/dev/null || true)"
+          published_version="$(printf '%s' "$published_version" | tr -d '\"[:space:]')"
+          if [[ "$published_version" != "$VERSION" ]]; then
+            npm publish "${package_files[0]}" --access public --provenance --tag "$NPM_TAG"
+          fi
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
