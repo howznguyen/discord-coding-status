@@ -112,7 +112,7 @@ jobs:
           echo "package_file=$package_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-package-${{ steps.release.outputs.version }}
           path: ${{ steps.package.outputs.package_file }}
