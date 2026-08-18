@@ -77,7 +77,7 @@ test('setup from a packed npm install creates a self-contained runtime', {
     'discord-coding-status',
     'app'
   );
-  assert.ok(fs.existsSync(path.join(runtimeRoot, 'node_modules', 'chalk', 'package.json')));
+  assert.ok(fs.existsSync(path.join(runtimeRoot, 'node_modules', 'picocolors', 'package.json')));
   assert.ok(fs.existsSync(path.join(runtimeRoot, 'node_modules', 'discord-rpc', 'package.json')));
 
   const version = execFileSync(process.execPath, [
