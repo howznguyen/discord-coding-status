@@ -30,6 +30,13 @@ export function detectedClaudeForSetup(
   return detectedHookCapabilityForSetup(detections, providers, 'claude');
 }
 
+export function detectedGrokForSetup(
+  detections: SetupToolDetection[],
+  providers: readonly ToolProvider[]
+): boolean {
+  return detectedHookCapabilityForSetup(detections, providers, 'grok');
+}
+
 function shouldInstallHooks(
   args: Record<string, string | boolean>,
   detections: SetupToolDetection[],
@@ -74,5 +81,20 @@ export function shouldInstallClaudeHooks(
     'claude',
     'claude-hooks',
     'no-claude-hooks'
+  );
+}
+
+export function shouldInstallGrokHooks(
+  args: Record<string, string | boolean>,
+  detections: SetupToolDetection[],
+  providers: readonly ToolProvider[]
+): boolean {
+  return shouldInstallHooks(
+    args,
+    detections,
+    providers,
+    'grok',
+    'grok-hooks',
+    'no-grok-hooks'
   );
 }

@@ -29,6 +29,7 @@ export const grokCliProvider: ToolProvider = {
       candidates: ['grok']
     }
   },
+  hooks: ['grok'],
   discord: {
     application: 'grok',
     label: 'Grok Code',

@@ -19,6 +19,15 @@ import {
   removeManagedClaudeHooks
 } from './claude-hooks';
 import {
+  GROK_HOOK_EVENTS,
+  GROK_HOOKS_DIR,
+  GROK_HOOKS_FILE,
+  getManagedGrokHookStatus,
+  grokHookSessionFromArgs,
+  installManagedGrokHooks,
+  removeManagedGrokHooks
+} from './grok-hooks';
+import {
   ClaudeQuotaEngine,
   claudeCredentialGeneration,
   createClaudeCredentialStore,
@@ -28,8 +37,10 @@ import {
 import {
   detectedClaudeForSetup,
   detectedCodexForSetup,
+  detectedGrokForSetup,
   shouldInstallClaudeHooks,
-  shouldInstallCodexHooks
+  shouldInstallCodexHooks,
+  shouldInstallGrokHooks
 } from './commands/setup/policy';
 import { detectSetupTools } from './adapters/system/installed-tools';
 import { runMetaCommand } from './commands/meta/command';
@@ -1606,7 +1617,7 @@ function printClaudeHooksStatus(): void {
 }
 
 function runStateCommand(command: string): boolean {
-  if (!['hook', 'codex-hook', 'claude-hook', 'clear', 'state'].includes(command)) {
+  if (!['hook', 'codex-hook', 'claude-hook', 'grok-hook', 'clear', 'state'].includes(command)) {
     return false;
   }
 
@@ -1638,6 +1649,12 @@ function runStateCommand(command: string): boolean {
 
   if (command === 'claude-hook') {
     const session = claudeHookSessionFromArgs(args);
+    upsertHookState(session);
+    return true;
+  }
+
+  if (command === 'grok-hook') {
+    const session = grokHookSessionFromArgs(args);
     upsertHookState(session);
     return true;
   }
@@ -1680,6 +1697,7 @@ function runSetupCommand(command: string): boolean {
   const startNow = !Boolean(args['no-start'] || args.no_start);
   const installCodexHookSet = shouldInstallCodexHooks(args, detections, toolProviders);
   const installClaudeHookSet = shouldInstallClaudeHooks(args, detections, toolProviders);
+  const installGrokHookSet = shouldInstallGrokHooks(args, detections, toolProviders);
 
   if (dryRun) {
     console.log(JSON.stringify({
@@ -1705,6 +1723,12 @@ function runSetupCommand(command: string): boolean {
           ? 'forced'
           : ((args['no-claude-hooks'] || args.no_claude_hooks) ? 'disabled' : 'auto')
       },
+      grokHooks: {
+        install: installGrokHookSet,
+        mode: (args['grok-hooks'] || args.grok_hooks)
+          ? 'forced'
+          : ((args['no-grok-hooks'] || args.no_grok_hooks) ? 'disabled' : 'auto')
+      },
       startup: process.platform === 'darwin'
         ? path.join(os.homedir(), 'Library', 'LaunchAgents', `${MACOS_LAUNCH_AGENT_ID}.plist`)
         : WINDOWS_TASK_NAME
@@ -1720,6 +1744,9 @@ function runSetupCommand(command: string): boolean {
     : null;
   const claudeHooks = installClaudeHookSet
     ? installClaudeHooks(scriptPath)
+    : null;
+  const grokHooks = installGrokHookSet
+    ? installManagedGrokHooks(scriptPath)
     : null;
 
   console.log('');
@@ -1747,6 +1774,14 @@ function runSetupCommand(command: string): boolean {
     hookLines.push(warning('  ✖ Claude hooks skipped by --no-claude-hooks.'));
   } else {
     hookLines.push(dim('  · Claude hooks skipped (Claude Code not detected).'));
+  }
+  if (grokHooks) {
+    hookLines.push(`  ${success(`✔ ${grokHooks.installed} Grok hooks`)} → ${accent(grokHooks.hooksFile)}`);
+    hookLines.push(dim('    Grok hooks are globally trusted and need no manual review.'));
+  } else if (detectedGrokForSetup(detections, toolProviders)) {
+    hookLines.push(warning('  ✖ Grok hooks skipped by --no-grok-hooks.'));
+  } else {
+    hookLines.push(dim('  · Grok hooks skipped (Grok not detected).'));
   }
   if (hookLines.length) {
     console.log('');
@@ -1818,6 +1853,50 @@ function runClaudeHooksCommand(command: string): boolean {
   if (result.removed) {
     console.log(warning(`Replaced ${result.removed} existing ${APP_TITLE} Claude hook(s).`));
   }
+  return true;
+}
+
+function printGrokHooksStatus(): void {
+  const status = getManagedGrokHookStatus();
+  console.log(JSON.stringify({
+    grokHooksDir: GROK_HOOKS_DIR,
+    hooksFile: GROK_HOOKS_FILE,
+    hooksFileExists: fs.existsSync(GROK_HOOKS_FILE),
+    expectedEvents: GROK_HOOK_EVENTS,
+    ...status
+  }, null, 2));
+}
+
+function runGrokHooksCommand(command: string): boolean {
+  if (![
+    'setup-grok-hooks',
+    'install-grok-hooks',
+    'enable-grok-hooks',
+    'disable-grok-hooks',
+    'uninstall-grok-hooks',
+    'grok-hooks-status'
+  ].includes(command)) {
+    return false;
+  }
+
+  if (command === 'grok-hooks-status') {
+    printGrokHooksStatus();
+    return true;
+  }
+
+  if (command === 'disable-grok-hooks' || command === 'uninstall-grok-hooks') {
+    const result = removeManagedGrokHooks();
+    console.log(`${success(`Removed ${result.removed}`)} ${APP_TITLE} Grok hook(s) from ${accent(result.hooksFile)}.`);
+    return true;
+  }
+
+  const scriptPath = copyRuntimeToInstallDir();
+  const result = installManagedGrokHooks(scriptPath);
+  console.log(`${success(`Installed ${result.installed}`)} ${APP_TITLE} Grok hook(s) in ${accent(result.hooksFile)}.`);
+  if (result.removed) {
+    console.log(warning(`Replaced ${result.removed} existing ${APP_TITLE} Grok hook(s).`));
+  }
+  console.log(dim('Grok hooks live in the globally trusted ~/.grok/hooks directory.'));
   return true;
 }
 
@@ -1898,6 +1977,10 @@ async function main(): Promise<void> {
   }
 
   if (runClaudeHooksCommand(command)) {
+    process.exit(process.exitCode || 0);
+  }
+
+  if (runGrokHooksCommand(command)) {
     process.exit(process.exitCode || 0);
   }
 
