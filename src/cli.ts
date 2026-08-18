@@ -8,9 +8,6 @@ import * as readlineCore from 'node:readline';
 import * as readline from 'node:readline/promises';
 import { exec, execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createColors } from 'picocolors';
-
-const pc = createColors(Boolean(process.stdout?.isTTY && !process.env.NO_COLOR));
 import DiscordRPC from 'discord-rpc';
 import {
   CLAUDE_LIFECYCLE_HOOK_EVENTS,
@@ -50,14 +47,93 @@ import {
   requireToolPresence,
   toolProviders
 } from './providers/registry';
-import {
-  discordApplicationForTool,
-  resolveDiscordApplications
-} from './providers/discord';
+import { discordApplicationForTool } from './providers/discord';
 import {
   getCwdForProcess,
   getProcessList
 } from './adapters/system/processes';
+import {
+  pc,
+  APP_ID,
+  APP_TITLE,
+  APP_AUTHOR,
+  APP_WEBSITE,
+  APP_REPOSITORY,
+  APP_LICENSE,
+  MACOS_LAUNCH_AGENT_ID,
+  WINDOWS_TASK_NAME,
+  PI_EXTENSION_TARGET,
+  OPENCODE_PLUGIN_TARGET,
+  USER_DATA_DIR,
+  CONFIG_DIR,
+  CONFIG_FILE,
+  LEGACY_CONFIG_FILE,
+  DEFAULT_STATE_FILE,
+  STATE_FILE,
+  CONFIG_EDITOR_FIELDS,
+  CODEX_HOME,
+  CODEX_HOOKS_FILE,
+  CLAUDE_CONFIG_DIR,
+  CLAUDE_SETTINGS_FILE,
+  CLAUDE_CREDENTIALS_FILE,
+  CLAUDE_KEYCHAIN_SERVICE,
+  CODEX_HOOK_EVENTS,
+  DISCORD_APPLICATIONS,
+  CODEX_CLIENT_ID,
+  CLAUDE_CLIENT_ID,
+  OPENCODE_CLIENT_ID,
+  PI_CLIENT_ID,
+  FALLBACK_CLIENT_ID,
+  LARGE_IMAGE_KEY,
+  SMALL_IMAGE_KEY,
+  DETAIL_LEVEL,
+  PROJECT_NAME_OVERRIDE,
+  PACKAGE_NAME_OVERRIDE,
+  USAGE_TEXT,
+  USAGE_COMMAND,
+  CODEX_QUOTA_SOURCE,
+  CODEX_BIN,
+  CODEX_AUTH_FILE,
+  CODEX_API_BASE_URL,
+  CODEX_OAUTH_CLIENT_ID,
+  PLAN_TEXT_OVERRIDE,
+  LIMITS_TEXT_OVERRIDE,
+  PREFER_CODEX_CLI,
+  ACTIVITY_STYLE,
+  SHOW_ACTIVITY,
+  SHOW_PROJECT,
+  SHOW_MODEL,
+  SHOW_QUOTA,
+  SHOW_CONTEXT,
+  SHOW_PACKAGE,
+  STATE_MAX_AGE_MS,
+  STATE_LOCK_TIMEOUT_MS,
+  POLL_INTERVAL_MS,
+  STATE_WATCH_DEBOUNCE_MS,
+  PROCESS_DETECTION_ENABLED,
+  DEBUG_ENABLED,
+  RECONNECT_INTERVAL_MS,
+  CONNECT_TIMEOUT_MS,
+  USAGE_TIMEOUT_MS,
+  USAGE_REFRESH_INTERVAL_MS,
+  MAX_PRESENCE_TEXT_LENGTH,
+  VERSION,
+  dim,
+  success,
+  warning,
+  danger,
+  accent,
+  title,
+  execFileSyncString,
+  compactHomePath,
+  shellQuoteArg,
+  asRecord,
+  extractString,
+  extractNumber,
+  extractNumberLike,
+  getPackageRoot,
+  logError
+} from './env';
 import type {
   ActivityStyle,
   ConfigEditorField,
@@ -71,25 +147,19 @@ import {
   BOOLEAN_CONFIG_KEYS,
   CONFIG_TUI_ITEMS,
   DEFAULT_ACTIVITY_STYLE,
-  DEFAULT_CLAUDE_CONFIG_DIR,
   DEFAULT_CODEX_AUTH_FILE,
   DEFAULT_CODEX_QUOTA_SOURCE,
   DEFAULT_DETAIL_LEVEL,
-  ENV_CONFIG_ALIASES,
-  createConfigEditorFields
+  ENV_CONFIG_ALIASES
 } from './commands/config/schema';
 import {
   defaultDisplayLayout,
   displayLayoutFromEntries,
-  displaySettingFromEnvironment,
-  envPathValue,
   envValue,
-  loadEnvironmentFiles,
   normalizeActivityStyle,
   normalizeCodexQuotaSource,
   normalizeDetailLevel,
   parseDotEnv,
-  parseBoolean,
   parseOptionalBoolean,
   readJsonConfigFile,
   resolveHomePath
@@ -120,129 +190,6 @@ import type { DaemonRefreshResult } from './adapters/startup/types';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
-
-const APP_ID = 'discord-coding-status';
-const APP_TITLE = 'Discord Coding Status';
-const APP_AUTHOR = '@howznguyen';
-const APP_WEBSITE = 'https://howznguyen.dev/projects/discord-coding-status';
-const APP_REPOSITORY = 'https://github.com/howznguyen/discord-coding-status';
-const APP_LICENSE = 'MIT';
-const MACOS_LAUNCH_AGENT_ID = 'io.github.discord-coding-status.daemon';
-const WINDOWS_TASK_NAME = 'DiscordCodingStatus';
-const PI_EXTENSION_TARGET = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'discord-coding-status.ts');
-const OPENCODE_PLUGIN_TARGET = path.join(os.homedir(), '.config', 'opencode', 'plugins', 'discord-coding-status.js');
-const USER_DATA_DIR = path.join(os.homedir(), APP_ID);
-const CONFIG_DIR = getConfigDirectory();
-const CONFIG_FILE = path.join(USER_DATA_DIR, 'config.json');
-const LEGACY_CONFIG_FILE = path.join(CONFIG_DIR, '.env');
-const DEFAULT_STATE_FILE = path.join(USER_DATA_DIR, 'states.json');
-const CONFIG_EDITOR_FIELDS: ConfigEditorField[] = createConfigEditorFields(DEFAULT_STATE_FILE);
-const CODEX_HOME = resolveHomePath(process.env.CODEX_HOME || '~/.codex');
-const CODEX_HOOKS_FILE = path.join(CODEX_HOME, 'hooks.json');
-const CLAUDE_CONFIG_DIR = resolveHomePath(process.env.CLAUDE_CONFIG_DIR || DEFAULT_CLAUDE_CONFIG_DIR);
-const CLAUDE_SETTINGS_FILE = path.join(CLAUDE_CONFIG_DIR, 'settings.json');
-const CLAUDE_CREDENTIALS_FILE = path.join(CLAUDE_CONFIG_DIR, '.credentials.json');
-const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials';
-const CODEX_HOOK_EVENTS = [
-  'SessionStart',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PermissionRequest',
-  'PostToolUse',
-  'Stop'
-] as const;
-
-loadEnvironmentFiles(CONFIG_FILE, LEGACY_CONFIG_FILE, process.cwd(), logError);
-
-const DISCORD_APPLICATIONS = resolveDiscordApplications(toolProviders, envValue);
-const CODEX_CLIENT_ID = DISCORD_APPLICATIONS.get('codex')?.clientId || '';
-const CLAUDE_CLIENT_ID = DISCORD_APPLICATIONS.get('claude')?.clientId || '';
-const OPENCODE_CLIENT_ID = DISCORD_APPLICATIONS.get('opencode')?.clientId || '';
-const PI_CLIENT_ID = DISCORD_APPLICATIONS.get('pi')?.clientId || '';
-const FALLBACK_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || '').trim();
-const LARGE_IMAGE_KEY = (process.env.DISCORD_LARGE_IMAGE_KEY || '').trim();
-const SMALL_IMAGE_KEY = (process.env.DISCORD_SMALL_IMAGE_KEY || '').trim();
-const DETAIL_LEVEL = normalizeDetailLevel(envValue('DISCORD_CODING_STATUS_DETAIL_LEVEL', DEFAULT_DETAIL_LEVEL));
-const PROJECT_NAME_OVERRIDE = envValue('DISCORD_CODING_STATUS_PROJECT_NAME').trim();
-const PACKAGE_NAME_OVERRIDE = envValue('DISCORD_CODING_STATUS_PACKAGE_NAME').trim();
-const USAGE_TEXT = envValue('DISCORD_CODING_STATUS_USAGE_TEXT').trim();
-const USAGE_COMMAND = envValue('DISCORD_CODING_STATUS_USAGE_COMMAND').trim();
-const CODEX_QUOTA_SOURCE = normalizeCodexQuotaSource(envValue('DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE', DEFAULT_CODEX_QUOTA_SOURCE));
-const CODEX_BIN = envValue('DISCORD_CODING_STATUS_CODEX_BIN', 'codex').trim() || 'codex';
-const CODEX_AUTH_FILE = resolveHomePath(envValue('DISCORD_CODING_STATUS_CODEX_AUTH_FILE', DEFAULT_CODEX_AUTH_FILE));
-const CODEX_API_BASE_URL = envValue('DISCORD_CODING_STATUS_CODEX_API_BASE_URL', 'https://chatgpt.com/backend-api').trim().replace(/\/$/, '');
-const CODEX_OAUTH_CLIENT_ID = envValue('DISCORD_CODING_STATUS_CODEX_OAUTH_CLIENT_ID', 'app_EMoamEEZ73f0CkXaXp7hrann').trim();
-const PLAN_TEXT_OVERRIDE = envValue('DISCORD_CODING_STATUS_PLAN_TEXT').trim().replace(/\\\$/g, '$');
-const LIMITS_TEXT_OVERRIDE = envValue('DISCORD_CODING_STATUS_LIMITS_TEXT').trim();
-const PREFER_CODEX_CLI = parseBoolean(envValue('DISCORD_CODING_STATUS_PREFER_CODEX_CLI'));
-const ACTIVITY_STYLE = normalizeActivityStyle(
-  envValue('DISCORD_CODING_STATUS_ACTIVITY_STYLE', DEFAULT_ACTIVITY_STYLE)
-);
-const SHOW_ACTIVITY = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_ACTIVITY', true);
-const SHOW_PROJECT = displaySettingFromEnvironment(
-  'DISCORD_CODING_STATUS_SHOW_PROJECT',
-  DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full'
-);
-const SHOW_MODEL = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_MODEL', true);
-const SHOW_QUOTA = displaySettingFromEnvironment(
-  'DISCORD_CODING_STATUS_SHOW_QUOTA',
-  DETAIL_LEVEL === 'project' || DETAIL_LEVEL === 'full'
-);
-const SHOW_CONTEXT = displaySettingFromEnvironment('DISCORD_CODING_STATUS_SHOW_CONTEXT', false);
-const SHOW_PACKAGE = displaySettingFromEnvironment(
-  'DISCORD_CODING_STATUS_SHOW_PACKAGE',
-  DETAIL_LEVEL === 'full'
-);
-const STATE_FILE = path.resolve(resolveHomePath(envPathValue('DISCORD_CODING_STATUS_STATE_FILE', DEFAULT_STATE_FILE)));
-const STATE_MAX_AGE_MS = Number(envValue('DISCORD_CODING_STATUS_STATE_MAX_AGE_MS', String(15 * 60_000)));
-const STATE_LOCK_TIMEOUT_MS = Number(envValue('DISCORD_CODING_STATUS_STATE_LOCK_TIMEOUT_MS', '2000'));
-
-const POLL_INTERVAL_OVERRIDE_MS = Number(
-  envValue('DISCORD_CODING_STATUS_POLL_INTERVAL_MS', '10000')
-);
-const POLL_INTERVAL_MS = Number.isFinite(POLL_INTERVAL_OVERRIDE_MS)
-  ? Math.max(100, POLL_INTERVAL_OVERRIDE_MS)
-  : 10_000;
-const STATE_WATCH_DEBOUNCE_MS = 25;
-const PROCESS_DETECTION_ENABLED = envValue(
-  'DISCORD_CODING_STATUS_PROCESS_DETECTION',
-  'on'
-).trim().toLowerCase() !== 'off';
-const DEBUG_ENABLED = envValue('DISCORD_CODING_STATUS_DEBUG').trim().toLowerCase() === '1';
-const RECONNECT_INTERVAL_MS = 15_000;
-const CONNECT_TIMEOUT_MS = 10_000;
-const USAGE_TIMEOUT_MS = Number(envValue('DISCORD_CODING_STATUS_USAGE_TIMEOUT_MS', '8000'));
-const USAGE_REFRESH_INTERVAL_MS = Number(envValue('DISCORD_CODING_STATUS_USAGE_REFRESH_INTERVAL_MS', '60000'));
-const MAX_PRESENCE_TEXT_LENGTH = 128;
-const VERSION = readPackageVersion();
-
-function readPackageVersion(): string {
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(path.join(getPackageRoot(), 'package.json'), 'utf8')) as {
-      version?: unknown;
-    };
-
-    return typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
-  } catch (_) {
-    return '0.0.0';
-  }
-}
-
-function getPackageRoot(): string {
-  return path.basename(__dirname) === 'dist' ? path.dirname(__dirname) : __dirname;
-}
-
-function getConfigDirectory(): string {
-  if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', APP_ID);
-  }
-
-  if (process.platform === 'win32') {
-    return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), APP_ID);
-  }
-
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), APP_ID);
-}
 
 const STATUS_EMOJI: Record<string, string> = {
   active: '⚡',
@@ -406,30 +353,6 @@ let shuttingDown = false;
 const cachedUsageTextByKey = new Map<string, { text: string | null; fetchedAt: number }>();
 const usageRefreshesByKey = new Map<string, Promise<void>>();
 const claudeUsageRevisionBySession = new Map<string, number>();
-
-function dim(value: string): string {
-  return pc.dim(value);
-}
-
-function success(value: string): string {
-  return pc.green(value);
-}
-
-function warning(value: string): string {
-  return pc.yellow(value);
-}
-
-function danger(value: string): string {
-  return pc.red(value);
-}
-
-function accent(value: string): string {
-  return pc.cyan(value);
-}
-
-function title(value: string): string {
-  return pc.bold(pc.cyan(value));
-}
 
 function shouldShowProject(): boolean {
   return SHOW_PROJECT;
@@ -1093,22 +1016,6 @@ function findCodexAncestorPid(startPid = process.ppid): number {
   }
 
   return currentPid;
-}
-
-function execFileSyncString(
-  command: string,
-  args: string[],
-  timeout = 1_000,
-  maxBuffer = 64 * 1024
-): string {
-  const result = execFileSync(command, args, {
-    encoding: 'utf8',
-    timeout,
-    maxBuffer,
-    stdio: ['ignore', 'pipe', 'ignore']
-  });
-
-  return typeof result === 'string' ? result : String(result);
 }
 
 function buildSessionId(state: Pick<HookSessionState, 'tool' | 'surface' | 'cwd'>): string {
@@ -1966,13 +1873,6 @@ function truncateTerminalText(value: string, maxLength: number): string {
   return maxLength > 3 ? `${value.slice(0, maxLength - 3)}...` : value.slice(0, maxLength);
 }
 
-function compactHomePath(value: string): string {
-  const home = os.homedir();
-  return home && value.startsWith(`${home}${path.sep}`)
-    ? `~${path.sep}${value.slice(home.length + 1)}`
-    : value;
-}
-
 function renderConfigTui(
   entries: Record<string, string>,
   samples: ConfigPreviewSamples,
@@ -2516,14 +2416,6 @@ function printStartupStatus(): void {
     installed: false,
     supported: false
   }, null, 2));
-}
-
-function shellQuoteArg(value: string): string {
-  if (process.platform === 'win32') {
-    return `"${value.replace(/"/g, '\\"')}"`;
-  }
-
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function codexHookCommand(scriptPath: string, event: string): string {
@@ -3090,33 +2982,6 @@ function formatUsageWindow(label: string, window: unknown): string | null {
   const remainingPercent = Math.max(0, Math.min(100, 100 - data.usedPercent));
 
   return `${windowLabel} ${Math.round(remainingPercent)}%`;
-}
-
-function extractNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function extractNumberLike(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
-}
-
-function extractString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 function toolFamilyForTool(tool: ActiveTool | null | undefined): ToolFamily {
@@ -4009,11 +3874,6 @@ function debugLog(message: string): void {
   if (DEBUG_ENABLED) {
     log(`[debug] ${message}`);
   }
-}
-
-function logError(message: string, error?: unknown): void {
-  const detail = error instanceof Error ? error.message : String(error || '');
-  console.error(`${dim(`[${APP_ID}]`)} ${dim(new Date().toISOString())} ${danger(message)}${detail ? `: ${detail}` : ''}`);
 }
 
 function validateEnvironment(): void {
