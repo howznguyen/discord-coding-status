@@ -243,6 +243,67 @@ export function activityFromGrokHook(event: string, toolName: string | null): st
   return null;
 }
 
+export function resolveGrokModelAndEffort(
+  input?: Record<string, unknown>,
+  args?: Record<string, string | boolean>
+): { model?: string; effort?: string } {
+  const argModel = args ? getArgString(args, 'model') : null;
+  const argEffort = args ? (getArgString(args, 'effort') || getArgString(args, 'reasoning-effort')) : null;
+
+  const inputModel = input ? findStringDeep(input, ['model', 'model_name', 'modelName', 'model_id', 'modelId']) : null;
+  const inputEffort = input ? findStringDeep(input, ['effort', 'reasoning_effort', 'reasoningEffort', 'model_reasoning_effort', 'modelReasoningEffort']) : null;
+
+  let model: string | null = argModel || inputModel || null;
+  let effort: string | null = argEffort || inputEffort || null;
+
+  if (!model) {
+    try {
+      const grokDir = GROK_HOOKS_DIR ? path.dirname(GROK_HOOKS_DIR) : path.join(os.homedir(), '.grok');
+      const modelsCacheFile = path.join(grokDir, 'models_cache.json');
+      if (fs.existsSync(modelsCacheFile)) {
+        const parsed = JSON.parse(fs.readFileSync(modelsCacheFile, 'utf8')) as Record<string, unknown>;
+        const models = asRecord(parsed?.models);
+        if (models) {
+          const firstKey = Object.keys(models)[0];
+          const firstModel = asRecord(models[firstKey]);
+          const info = asRecord(firstModel?.info);
+          if (info) {
+            model = typeof info.name === 'string' && info.name.trim()
+              ? info.name.trim()
+              : (typeof info.id === 'string' && info.id.trim() ? info.id.trim() : null);
+            if (!effort && typeof info.reasoning_effort === 'string' && info.reasoning_effort.trim()) {
+              effort = info.reasoning_effort.trim();
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Ignore cache read errors
+    }
+  }
+
+  if (!model) {
+    try {
+      const grokDir = GROK_HOOKS_DIR ? path.dirname(GROK_HOOKS_DIR) : path.join(os.homedir(), '.grok');
+      const configFile = path.join(grokDir, 'config.toml');
+      if (fs.existsSync(configFile)) {
+        const content = fs.readFileSync(configFile, 'utf8');
+        const match = content.match(/(?:model|fork_secondary_model)\s*=\s*"([^"]+)"/);
+        if (match?.[1]?.trim()) {
+          model = match[1].trim();
+        }
+      }
+    } catch (_) {
+      // Ignore config read errors
+    }
+  }
+
+  return {
+    model: model || undefined,
+    effort: effort || undefined
+  };
+}
+
 // The Grok hook process is a passive reporter: it must ALWAYS exit 0 and never
 // write to stdout (or only valid JSON) so PreToolUse/Stop hooks cannot block the
 // agent. Errors are logged through the session state shape only, never a non-zero exit.
@@ -261,6 +322,7 @@ export function grokHookSessionFromArgs(args: Record<string, string | boolean>):
     || findStringDeep(input, ['session_id', 'sessionId'])
     || `grok:cli:${cwd}:${process.ppid}`;
   const toolName = findStringDeep(input, ['tool_name', 'toolName', 'tool']);
+  const { model, effort } = resolveGrokModelAndEffort(input, args);
 
   return {
     tool: 'grok',
@@ -273,6 +335,7 @@ export function grokHookSessionFromArgs(args: Record<string, string | boolean>):
     package: getArgString(args, 'package') || undefined,
     title: getArgString(args, 'title') || undefined,
     activity: getArgString(args, 'activity') || activityFromGrokHook(event, toolName) || undefined,
-    model: undefined
+    model,
+    effort
   };
 }

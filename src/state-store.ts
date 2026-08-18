@@ -483,6 +483,50 @@ export function findCodexAncestorPid(startPid = process.ppid): number {
   return currentPid;
 }
 
+export function isGrokProcessAncestry(startPid = process.ppid): boolean {
+  if (
+    Boolean(
+      process.env.GROK_EVENT ||
+      process.env.GROK_SESSION_ID ||
+      process.env.GROK_MESSAGE ||
+      process.env.GROK_DIR ||
+      process.env.GROK_BIN
+    )
+  ) {
+    return true;
+  }
+
+  let currentPid = startPid;
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    try {
+      const output = execFileSyncString('ps', ['-p', String(currentPid), '-o', 'ppid=,comm=,args=']);
+      const line = output.trim();
+      const match = line.match(/^(\d+)\s+(.+)$/);
+      if (!match) {
+        return false;
+      }
+
+      const parentPid = Number(match[1]);
+      const commandText = match[2].toLowerCase();
+
+      if (/(?:^|[\s/])grok(?:[/.][^\s]*)?(?:\s|$)/.test(commandText)) {
+        return true;
+      }
+
+      if (!parentPid || parentPid === currentPid) {
+        return false;
+      }
+
+      currentPid = parentPid;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export function buildSessionId(state: Pick<HookSessionState, 'tool' | 'surface' | 'cwd'>): string {
   return `${state.tool}:${state.surface}:${state.cwd}`;
 }
@@ -751,10 +795,14 @@ export function upsertHookState(session: HookSessionState): void {
   });
 }
 
-export function clearHookState(sessionId: string): void {
+export function clearHookState(sessionId?: string): void {
   withStateLock(() => {
     const state = readStateFile();
-    delete state.sessions[sessionId];
+    if (sessionId) {
+      delete state.sessions[sessionId];
+    } else {
+      state.sessions = {};
+    }
 
     writeStateFile(cleanupStateSessions(state, Date.now()));
   });

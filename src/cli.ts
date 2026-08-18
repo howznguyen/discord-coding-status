@@ -35,13 +35,13 @@ import {
   evaluateClaudeQuotaEligibility
 } from './claude-quota';
 import {
-  detectedClaudeForSetup,
-  detectedCodexForSetup,
-  detectedGrokForSetup,
   shouldInstallClaudeHooks,
   shouldInstallCodexHooks,
   shouldInstallGrokHooks
 } from './commands/setup/policy';
+import { renderSetupSummary } from './commands/setup/summary';
+import { buildSetupToolRows } from './commands/setup/tools';
+import { renderStatusSummary, sessionToActivityItem } from './commands/status/summary';
 import { detectSetupTools } from './adapters/system/installed-tools';
 import { runMetaCommand } from './commands/meta/command';
 import { getArgString, parseArgs } from './commands/args';
@@ -165,6 +165,7 @@ import {
   claudeQuotaRequestOptions,
   codexHookSessionFromArgs,
   debugLog,
+  isGrokProcessAncestry,
   readClaudeSettings,
   readStateFile,
   sessionFromArgs,
@@ -181,7 +182,10 @@ import type {
 import type { DaemonRefreshResult } from './adapters/startup/types';
 import {
   claudeQuotaEngine,
-  getNativeCodexQuotaText
+  fetchAllHarnessQuotas,
+  getNativeCodexQuotaText,
+  getNativeGrokQuotaText,
+  getNativeOpencodeQuotaText
 } from './quota';
 import {
   getGitBranch,
@@ -206,75 +210,6 @@ function getLogDirectory(): string {
 
 function getRuntimeScriptPath(baseDirectory = getPackageRoot()): string {
   return path.join(baseDirectory, 'dist', 'cli.js');
-}
-
-function detectionFamilyName(key: string): string {
-  if (key.startsWith('codex')) {
-    return 'Codex';
-  }
-  if (key.startsWith('claude')) {
-    return 'Claude';
-  }
-  if (key.startsWith('opencode')) {
-    return 'OpenCode';
-  }
-  if (key.startsWith('pi')) {
-    return 'Pi';
-  }
-  return titleCase(key);
-}
-
-function printSessionIntegrations(): void {
-  const rows: Array<{ name: string; installed: boolean; target: string }> = [
-    {
-      name: 'Pi extension',
-      installed: fs.existsSync(PI_EXTENSION_TARGET),
-      target: PI_EXTENSION_TARGET
-    },
-    {
-      name: 'OpenCode plugin',
-      installed: fs.existsSync(OPENCODE_PLUGIN_TARGET),
-      target: OPENCODE_PLUGIN_TARGET
-    }
-  ];
-
-  console.log('');
-  console.log(title('Session integrations'));
-  for (const row of rows) {
-    const marker = row.installed ? success('✔') : dim('✖');
-    const hint = row.installed
-      ? accent(compactHomePath(row.target))
-      : dim('not installed — copy the bundled file to this path to enable');
-    console.log(`  ${marker} ${row.name.padEnd(16)} ${hint}`);
-  }
-}
-
-function printSetupDetections(detections: SetupToolDetection[]): void {
-  const families = new Map<string, SetupToolDetection[]>();
-  for (const item of detections) {
-    const family = detectionFamilyName(item.key);
-    const items = families.get(family) || [];
-    items.push(item);
-    families.set(family, items);
-  }
-
-  const maxNameLength = Math.max(...detections.map((item) => item.name.length));
-  const detectedCount = detections.filter((item) => item.detected).length;
-
-  console.log('');
-  console.log(title('Detected tools'));
-  for (const [family, items] of families) {
-    console.log(`  ${pc.bold(family)}`);
-    for (const item of items) {
-      const marker = item.detected ? success('✔') : dim('✖');
-      const name = item.name.padEnd(maxNameLength);
-      const detail = item.detected
-        ? accent(item.detail || 'installed')
-        : dim('not installed');
-      console.log(`    ${marker} ${name}  ${detail}`);
-    }
-  }
-  console.log(dim(`  ${detectedCount} of ${detections.length} tool installations found.`));
 }
 
 function copyPathIfExists(source: string, target: string): void {
@@ -1333,38 +1268,31 @@ function uninstallStartup(purge: boolean): void {
   }
 }
 
-function printStartupStatus(): void {
+async function printStartupStatus(args: Record<string, string | boolean> = {}): Promise<void> {
+  const isJson = Boolean(args.json || args['json']);
+
+  let installed = false;
+  let target = '';
+
   if (process.platform === 'darwin') {
     const plistPath = getMacLaunchAgentPath();
-    console.log(JSON.stringify({
-      platform: 'macos',
-      installed: fs.existsSync(plistPath),
-      plistPath,
-      configFile: CONFIG_FILE,
-      stateFile: STATE_FILE,
-      codexClientId: CODEX_CLIENT_ID,
-      claudeClientId: CLAUDE_CLIENT_ID,
-      opencodeClientId: OPENCODE_CLIENT_ID,
-      piClientId: PI_CLIENT_ID,
-      grokClientId: GROK_CLIENT_ID,
-      installDirectory: getInstallDirectory()
-    }, null, 2));
-    return;
-  }
-
-  if (process.platform === 'win32') {
-    let installed = false;
+    installed = fs.existsSync(plistPath);
+    target = plistPath;
+  } else if (process.platform === 'win32') {
     try {
       execFileSync('schtasks', ['/Query', '/TN', WINDOWS_TASK_NAME], { stdio: 'ignore' });
       installed = true;
     } catch (_) {
       installed = false;
     }
+    target = WINDOWS_TASK_NAME;
+  }
 
+  if (isJson) {
     console.log(JSON.stringify({
-      platform: 'windows',
+      platform: process.platform === 'darwin' ? 'macos' : (process.platform === 'win32' ? 'windows' : process.platform),
       installed,
-      taskName: WINDOWS_TASK_NAME,
+      target,
       configFile: CONFIG_FILE,
       stateFile: STATE_FILE,
       codexClientId: CODEX_CLIENT_ID,
@@ -1377,11 +1305,62 @@ function printStartupStatus(): void {
     return;
   }
 
-  console.log(JSON.stringify({
-    platform: process.platform,
-    installed: false,
-    supported: false
-  }, null, 2));
+  const detections = detectSetupTools({
+    executableOverrides: { codexCli: [CODEX_BIN] },
+    pathOverrides: { codexHome: CODEX_HOME }
+  }, toolProviders);
+
+  const claudeHooksStatus = getManagedClaudeHookStatus(readClaudeSettings(), CLAUDE_LIFECYCLE_HOOK_EVENTS);
+  const grokHooksStatus = getManagedGrokHookStatus();
+  const codexInstalled = fs.existsSync(CODEX_HOOKS_FILE);
+
+  const tools = buildSetupToolRows({
+    detections,
+    providers: toolProviders,
+    claudeHooks: claudeHooksStatus.installed ? { installed: claudeHooksStatus.managedCount } : null,
+    codexHooks: codexInstalled ? { installed: 4 } : null,
+    grokHooks: grokHooksStatus.installed ? { installed: grokHooksStatus.managedCount } : null,
+    opencodePluginInstalled: fs.existsSync(OPENCODE_PLUGIN_TARGET),
+    piExtensionInstalled: fs.existsSync(PI_EXTENSION_TARGET),
+    args: {}
+  });
+
+  const state = cleanupStateSessions(readStateFile(), Date.now());
+  const sessions = Object.values(state.sessions).sort((a, b) => b.updated_at - a.updated_at);
+  const activities = sessions.map((s) => sessionToActivityItem(s));
+
+  const rawQuotas = await fetchAllHarnessQuotas();
+  const quotas = rawQuotas.map((q) => ({
+    tool: q.tool,
+    status: q.status === 'active' ? success('✔ Active') : dim('· Unavailable'),
+    detail: q.status === 'active' ? q.text : dim(q.text)
+  }));
+
+  console.log(renderStatusSummary({
+    appTitle: APP_TITLE,
+    version: VERSION,
+    author: APP_AUTHOR,
+    system: [
+      {
+        name: 'Startup',
+        status: installed ? success('✔ Active') : warning('✖ Not installed'),
+        target: accent(compactHomePath(target || 'not configured'))
+      },
+      {
+        name: 'Config',
+        status: fs.existsSync(CONFIG_FILE) ? success('✔ Loaded') : dim('· Default'),
+        target: accent(compactHomePath(CONFIG_FILE))
+      },
+      {
+        name: 'State store',
+        status: success('✔ Active'),
+        target: accent(compactHomePath(STATE_FILE))
+      }
+    ],
+    tools,
+    quotas,
+    activities
+  }));
 }
 
 function codexHookCommand(scriptPath: string, event: string): string {
@@ -1630,14 +1609,8 @@ function runStateCommand(command: string): boolean {
 
   if (command === 'clear') {
     const sessionId = getArgString(args, 'session-id') || getArgString(args, 'session_id');
-    if (!sessionId) {
-      console.error(danger('Missing --session-id.'));
-      process.exitCode = 1;
-      return true;
-    }
-
-    clearHookState(sessionId);
-    console.log(success(`Cleared session ${sessionId}`));
+    clearHookState(sessionId || undefined);
+    console.log(success(sessionId ? `Cleared session ${sessionId}` : 'Cleared all active sessions'));
     return true;
   }
 
@@ -1648,6 +1621,11 @@ function runStateCommand(command: string): boolean {
   }
 
   if (command === 'claude-hook') {
+    if (isGrokProcessAncestry()) {
+      const session = grokHookSessionFromArgs(args);
+      upsertHookState(session);
+      return true;
+    }
     const session = claudeHookSessionFromArgs(args);
     upsertHookState(session);
     return true;
@@ -1671,7 +1649,7 @@ function runStateCommand(command: string): boolean {
   return true;
 }
 
-function runSetupCommand(command: string): boolean {
+async function runSetupCommand(command: string): Promise<boolean> {
   if (!['setup', 'install', 'uninstall', 'status', 'startup-status'].includes(command)) {
     return false;
   }
@@ -1683,7 +1661,7 @@ function runSetupCommand(command: string): boolean {
   }, toolProviders);
 
   if (command === 'status' || command === 'startup-status') {
-    printStartupStatus();
+    await printStartupStatus(args);
     return true;
   }
 
@@ -1749,51 +1727,44 @@ function runSetupCommand(command: string): boolean {
     ? installManagedGrokHooks(scriptPath)
     : null;
 
-  console.log('');
-  console.log(success(`${APP_TITLE} installed.`));
-  printSetupDetections(detections);
+  const tools = buildSetupToolRows({
+    detections,
+    providers: toolProviders,
+    claudeHooks,
+    codexHooks,
+    grokHooks,
+    opencodePluginInstalled: fs.existsSync(OPENCODE_PLUGIN_TARGET),
+    piExtensionInstalled: fs.existsSync(PI_EXTENSION_TARGET),
+    args
+  });
 
-  console.log('');
-  console.log(title('Installation'));
-  console.log(`  ${pc.bold('Config').padEnd(10)} ${accent(compactHomePath(CONFIG_FILE))}`);
-  console.log(`  ${pc.bold('Runtime').padEnd(10)} ${accent(scriptPath)}`);
-  console.log(`  ${pc.bold('Startup').padEnd(10)} ${accent(startupTarget)}`);
-
-  const hookLines: string[] = [];
+  const notes: string[] = [];
   if (codexHooks) {
-    hookLines.push(`  ${success(`✔ ${codexHooks.installed} Codex hooks`)} → ${accent(codexHooks.hooksFile)}`);
-    hookLines.push(dim('    Open Codex and run `/hooks` once to review and trust the new hooks.'));
-  } else if (detectedCodexForSetup(detections, toolProviders)) {
-    hookLines.push(warning('  ✖ Codex hooks skipped by --no-codex-hooks.'));
-  } else {
-    hookLines.push(dim('  · Codex hooks skipped (Codex not detected).'));
+    notes.push('Codex: run `/hooks` once in Codex to review and trust new hooks.');
   }
-  if (claudeHooks) {
-    hookLines.push(`  ${success(`✔ ${claudeHooks.installed} Claude hooks`)} → ${accent(claudeHooks.settingsFile)}`);
-  } else if (detectedClaudeForSetup(detections, toolProviders)) {
-    hookLines.push(warning('  ✖ Claude hooks skipped by --no-claude-hooks.'));
-  } else {
-    hookLines.push(dim('  · Claude hooks skipped (Claude Code not detected).'));
-  }
-  if (grokHooks) {
-    hookLines.push(`  ${success(`✔ ${grokHooks.installed} Grok hooks`)} → ${accent(grokHooks.hooksFile)}`);
-    hookLines.push(dim('    Grok hooks are globally trusted and need no manual review.'));
-  } else if (detectedGrokForSetup(detections, toolProviders)) {
-    hookLines.push(warning('  ✖ Grok hooks skipped by --no-grok-hooks.'));
-  } else {
-    hookLines.push(dim('  · Grok hooks skipped (Grok not detected).'));
-  }
-  if (hookLines.length) {
-    console.log('');
-    console.log(title('Managed hooks'));
-    for (const line of hookLines) {
-      console.log(line);
-    }
-  }
-  printSessionIntegrations();
   if (!startNow) {
-    console.log(dim('Startup is installed; the daemon will run at next login.'));
+    notes.push('Startup is installed; the daemon will run at next login.');
   }
+
+  console.log(renderSetupSummary({
+    appTitle: APP_TITLE,
+    version: VERSION,
+    author: APP_AUTHOR,
+    tools,
+    system: [
+      {
+        name: 'Startup',
+        status: success('✔ Active'),
+        target: accent(compactHomePath(startupTarget))
+      },
+      {
+        name: 'Config',
+        status: success('✔ Saved'),
+        target: accent(compactHomePath(CONFIG_FILE))
+      }
+    ],
+    notes
+  }));
 
   return true;
 }
@@ -1922,8 +1893,24 @@ async function runQuotaCommand(command: string): Promise<boolean> {
     return true;
   }
 
+  if (requestedTool === 'grok' || requestedTool === 'opencode') {
+    const tool = requireToolPresence(requestedTool === 'grok' ? 'grokCli' : 'opencodeCli');
+    const quotaText = requestedTool === 'grok'
+      ? await getNativeGrokQuotaText(tool)
+      : await getNativeOpencodeQuotaText(tool);
+
+    if (!quotaText) {
+      console.error(danger(`${requestedTool} quota unavailable. Ensure you are logged in and try again.`));
+      process.exitCode = 1;
+      return true;
+    }
+
+    console.log(quotaText);
+    return true;
+  }
+
   if (requestedTool !== 'codex') {
-    console.error(danger(`Unsupported quota tool: ${requestedTool}. Use codex or claude.`));
+    console.error(danger(`Unsupported quota tool: ${requestedTool}. Use codex, claude, grok, or opencode.`));
     process.exitCode = 1;
     return true;
   }
@@ -1968,7 +1955,7 @@ async function main(): Promise<void> {
     process.exit(process.exitCode || 0);
   }
 
-  if (runSetupCommand(command)) {
+  if (await runSetupCommand(command)) {
     process.exit(process.exitCode || 0);
   }
 

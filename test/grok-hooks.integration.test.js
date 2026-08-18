@@ -200,3 +200,58 @@ test('grok PostToolUse maps to Finished <tool> and SessionStart stays active', a
   state = JSON.parse((await runCli(['state'], env)).stdout);
   assert.equal(state.sessions['grok-start'].status, 'running');
 });
+
+test('grok resolves model and effort from cache and config when available', async (t) => {
+  const { env } = createTestEnvironment(t);
+  const grokDir = path.dirname(GROK_HOOKS_DIR);
+  fs.mkdirSync(grokDir, { recursive: true });
+  t.after(() => {
+    try {
+      fs.rmSync(path.join(grokDir, 'models_cache.json'), { force: true });
+    } catch (_) {}
+  });
+
+  fs.writeFileSync(
+    path.join(grokDir, 'models_cache.json'),
+    JSON.stringify({
+      models: {
+        'grok-4.6': {
+          info: {
+            id: 'grok-4.6',
+            name: 'Grok 4.6',
+            reasoning_effort: 'high'
+          }
+        }
+      }
+    })
+  );
+
+  await runCli(
+    ['grok-hook', '--event', 'SessionStart'],
+    env,
+    15000,
+    JSON.stringify({ hookEventName: 'session_start', sessionId: 'grok-model-test', cwd: process.cwd() })
+  );
+  const state = JSON.parse((await runCli(['state'], env)).stdout);
+  assert.equal(state.sessions['grok-model-test'].tool, 'grok');
+  assert.equal(state.sessions['grok-model-test'].model, 'Grok 4.6');
+  assert.equal(state.sessions['grok-model-test'].effort, 'high');
+});
+
+test('claude-hook delegates to grok when invoked in grok environment', async (t) => {
+  const { env } = createTestEnvironment(t);
+  const grokEnv = {
+    ...env,
+    GROK_SESSION_ID: 'grok-compat-session'
+  };
+
+  await runCli(
+    ['claude-hook', '--event', 'UserPromptSubmit'],
+    grokEnv,
+    15000,
+    JSON.stringify({ hook_event_name: 'user_prompt_submit', session_id: 'grok-compat-session', cwd: process.cwd() })
+  );
+  const state = JSON.parse((await runCli(['state'], env)).stdout);
+  assert.equal(state.sessions['grok-compat-session'].tool, 'grok');
+  assert.equal(state.sessions['grok-compat-session'].status, 'running');
+});

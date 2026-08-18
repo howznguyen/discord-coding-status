@@ -24,7 +24,7 @@ export function renderMetaHelp(context: MetaCommandContext): string {
   const accent = (value: string): string => pc.cyan(value);
   const commandText = (value: string): string => pc.bold(value);
 
-  return `${pc.bold(pc.cyan(context.appTitle))} ${pc.dim(context.version)}
+  return `${pc.bold(pc.cyan(context.appTitle))} ${context.version} ${pc.dim(`by ${context.author}`)}
 ${pc.dim('Local Discord Rich Presence for Codex and Claude Code.')}
 
 ${pc.bold('Usage:')}
@@ -42,13 +42,19 @@ ${pc.bold('Usage:')}
   discord-coding-status setup-claude-hooks    Install Claude lifecycle hooks
   discord-coding-status claude-hooks-status   Print Claude hook install status
   discord-coding-status uninstall-claude-hooks Remove Claude lifecycle hooks
+  discord-coding-status setup-grok-hooks      Install Grok lifecycle hooks
+  discord-coding-status grok-hooks-status     Print Grok hook install status
+  discord-coding-status uninstall-grok-hooks  Remove Grok lifecycle hooks
   discord-coding-status hook --tool codex     Write or update a local session state
   discord-coding-status codex-hook --event stop
   discord-coding-status claude-hook --event Stop
+  discord-coding-status grok-hook --event SessionStart
   discord-coding-status clear --session-id ID
   discord-coding-status state
   discord-coding-status quota
   discord-coding-status quota --tool claude
+  discord-coding-status quota --tool grok
+  discord-coding-status quota --tool opencode
   discord-coding-status --version
 
 ${pc.bold('Default Discord Application IDs:')}
@@ -77,6 +83,7 @@ ${pc.bold('Examples:')}
   ${commandText('discord-coding-status config --preview')}
   ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
   ${commandText('npx -y discord-coding-status@latest setup --claude-hooks')}
+  ${commandText('npx -y discord-coding-status@latest setup --grok-hooks')}
   ${commandText('discord-coding-status status')}
   ${commandText('discord-coding-status daemon')}
   ${commandText('DISCORD_CODING_STATUS_DETAIL_LEVEL=project discord-coding-status state')}

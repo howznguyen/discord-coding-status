@@ -586,7 +586,7 @@ export async function getNativeCodexQuotaText(
   tool?: ActiveTool,
   quotaSource: CodexQuotaSource = CODEX_QUOTA_SOURCE
 ): Promise<string | null> {
-  if (quotaSource === 'off' || !isCodexTool(tool)) {
+  if (quotaSource === 'off' || (tool && !isCodexTool(tool))) {
     return null;
   }
 
@@ -851,10 +851,15 @@ export function resolveOpencodeApiKey(): string | null {
     return direct;
   }
 
-  for (const file of [
-    path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
-    path.join(os.homedir(), '.config', 'opencode', 'auth.json')
-  ]) {
+  const override = (process.env.DISCORD_CODING_STATUS_OPENCODE_AUTH_FILE || '').trim();
+  const files = override
+    ? [override]
+    : [
+        path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
+        path.join(os.homedir(), '.config', 'opencode', 'auth.json')
+      ];
+
+  for (const file of files) {
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
       const key = findOpencodeApiKeyDeep(parsed);
@@ -877,16 +882,54 @@ function findOpencodeApiKeyDeep(value: unknown, depth = 0): string | null {
   const record = value as Record<string, unknown>;
   const mentionsOpencode = JSON.stringify(record).toLowerCase().includes('opencode');
   if (mentionsOpencode) {
-    for (const key of ['key', 'apiKey', 'api_key', 'token', 'credentials', 'value']) {
-      const candidate = record[key];
-      if (typeof candidate === 'string' && /^sk-?[A-Za-z0-9]/.test(candidate.trim())) {
-        return candidate.trim();
-      }
+    const direct = extractSkLikeKey(record);
+    if (direct) {
+      return direct;
     }
   }
 
-  for (const child of Object.values(record)) {
+  for (const [name, child] of Object.entries(record)) {
+    // Entries keyed by an opencode provider name (e.g. { "opencode-go": { key: "sk-…" } }) do not
+    // necessarily mention "opencode" inside their own value, so search their subtree explicitly.
+    if (/opencode/i.test(name) && child && typeof child === 'object') {
+      const found = findSkLikeKeyDeep(child, depth + 1);
+      if (found) {
+        return found;
+      }
+    }
+
     const found = findOpencodeApiKeyDeep(child, depth + 1);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function extractSkLikeKey(record: Record<string, unknown>): string | null {
+  for (const key of ['key', 'apiKey', 'api_key', 'token', 'credentials', 'value']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && /^sk-?[A-Za-z0-9]/.test(candidate.trim())) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
+}
+
+function findSkLikeKeyDeep(value: unknown, depth = 0): string | null {
+  if (depth > 4 || !value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const direct = extractSkLikeKey(value as Record<string, unknown>);
+  if (direct) {
+    return direct;
+  }
+
+  for (const child of Object.values(value)) {
+    const found = findSkLikeKeyDeep(child, depth + 1);
     if (found) {
       return found;
     }
@@ -931,7 +974,7 @@ export function formatOpencodeGoUsage(payload: unknown): string | null {
 }
 
 export async function getNativeOpencodeQuotaText(tool?: ActiveTool): Promise<string | null> {
-  if (toolFamilyForTool(tool) !== 'opencode') {
+  if (tool && toolFamilyForTool(tool) !== 'opencode') {
     return null;
   }
 
@@ -961,6 +1004,319 @@ export async function getNativeOpencodeQuotaText(tool?: ActiveTool): Promise<str
     return formatOpencodeGoUsage(payload);
   } catch (error) {
     logError('OpenCode Go quota fetch failed', error);
+    return null;
+  }
+}
+
+const GROK_DEFAULT_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
+const GROK_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const GROK_BILLING_AUTH_MARKER = 'xai-grok-cli';
+const GROK_WEEKLY_PERIOD_TYPE = 'USAGE_PERIOD_TYPE_WEEKLY';
+const GROK_DEFAULT_REFRESH_URL = 'https://auth.x.ai/oauth2/token';
+const GROK_DEFAULT_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
+
+function grokRefreshUrl(): string {
+  return (process.env.DISCORD_CODING_STATUS_GROK_REFRESH_URL || GROK_DEFAULT_REFRESH_URL).trim();
+}
+
+function grokBillingUrl(): string {
+  return (process.env.DISCORD_CODING_STATUS_GROK_BILLING_URL || GROK_DEFAULT_BILLING_URL).trim();
+}
+
+function grokAuthFilePath(): string {
+  return (
+    process.env.DISCORD_CODING_STATUS_GROK_AUTH_FILE
+    || path.join(os.homedir(), '.grok', 'auth.json')
+  ).trim() || path.join(os.homedir(), '.grok', 'auth.json');
+}
+
+interface GrokAuthEntry {
+  key: string;
+  refreshToken?: string;
+  refresh?: string;
+  expiresAt?: string;
+  expires?: string;
+  oidcClientId?: string;
+}
+
+interface GrokAuthState {
+  entryKey: string;
+  entry: GrokAuthEntry;
+}
+
+function readGrokAuth(): GrokAuthState | null {
+  const file = grokAuthFilePath();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    const record = asRecord(parsed);
+    if (!record) {
+      return null;
+    }
+
+    for (const [entryKey, value] of Object.entries(record)) {
+      const raw = asRecord(value);
+      const key = extractString(raw?.key);
+      if (!key) {
+        continue;
+      }
+
+      return {
+        entryKey,
+        entry: {
+          key,
+          refreshToken: extractString(raw?.refresh_token ?? raw?.refreshToken) ?? undefined,
+          refresh: extractString(raw?.refresh) ?? undefined,
+          expiresAt: extractString(raw?.expires_at ?? raw?.expiresAt) ?? undefined,
+          expires: extractString(raw?.expires) ?? undefined,
+          oidcClientId: extractString(raw?.oidc_client_id ?? raw?.oidcClientId) ?? undefined
+        }
+      };
+    }
+  } catch (error) {
+    logError('Failed to read Grok auth file', error);
+  }
+
+  return null;
+}
+
+function grokClientId(entryKey: string, entry: GrokAuthEntry): string {
+  if (entry.oidcClientId) {
+    return entry.oidcClientId;
+  }
+
+  const parts = entryKey.split('::');
+  const candidate = parts[parts.length - 1]?.trim();
+  if (candidate) {
+    return candidate;
+  }
+
+  return GROK_DEFAULT_CLIENT_ID;
+}
+
+function grokJwtExpiresAtMs(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1] as string, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const exp = payload?.exp;
+    if (typeof exp === 'number' && Number.isFinite(exp)) {
+      return exp * 1000;
+    }
+  } catch (_) {
+    // Not a JWT; treat as having no embedded expiry.
+  }
+
+  return null;
+}
+
+function grokEntryExpiresAtMs(entry: GrokAuthEntry): number | null {
+  const value = entry.expiresAt ?? entry.expires;
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function grokTokenNeedsRefresh(entry: GrokAuthEntry, token: string): boolean {
+  const expiresAt = grokEntryExpiresAtMs(entry) ?? grokJwtExpiresAtMs(token);
+  return expiresAt !== null && expiresAt - Date.now() <= GROK_REFRESH_BUFFER_MS;
+}
+
+interface GrokRotatedCredentials {
+  token: string;
+  refreshToken?: string;
+  idToken?: string;
+  expiresAt?: number;
+}
+
+async function refreshGrokAccessToken(
+  entryKey: string,
+  entry: GrokAuthEntry
+): Promise<GrokRotatedCredentials | null> {
+  const refreshToken = entry.refreshToken ?? entry.refresh;
+  if (!refreshToken) {
+    return null;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: grokClientId(entryKey, entry),
+    refresh_token: refreshToken
+  });
+
+  try {
+    const payload = await fetchCodexJson(grokRefreshUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json'
+      },
+      body
+    });
+
+    const record = asRecord(payload);
+    const token = extractString(record?.access_token ?? record?.accessToken);
+    if (!token) {
+      return null;
+    }
+
+    const expiresIn = extractNumberLike(record?.expires_in ?? record?.expiresIn);
+    const expiresAt = expiresIn !== null && expiresIn > 0
+      ? Date.now() + expiresIn * 1000
+      : grokJwtExpiresAtMs(token) ?? Date.now() + 60 * 60 * 1000;
+
+    return {
+      token,
+      refreshToken: extractString(record?.refresh_token ?? record?.refreshToken) ?? undefined,
+      idToken: extractString(record?.id_token ?? record?.idToken) ?? undefined,
+      expiresAt
+    };
+  } catch (error) {
+    logError('Grok token refresh failed', error);
+    return null;
+  }
+}
+
+function persistGrokCredentials(entryKey: string, rotated: GrokRotatedCredentials): void {
+  try {
+    const file = grokAuthFilePath();
+    const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    const existing = existingText ? JSON.parse(existingText) as unknown : {};
+    const root = asRecord(existing) ?? {};
+    const entry = asRecord(root[entryKey]) ?? {};
+
+    entry.key = rotated.token;
+    if (rotated.refreshToken) {
+      entry.refresh_token = rotated.refreshToken;
+    }
+    if (rotated.idToken) {
+      entry.id_token = rotated.idToken;
+    }
+    if (rotated.expiresAt !== undefined) {
+      entry.expires_at = new Date(rotated.expiresAt).toISOString();
+    }
+
+    root[entryKey] = entry;
+    const tempFile = `${file}.tmp`;
+    fs.writeFileSync(tempFile, `${JSON.stringify(root, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempFile, file);
+  } catch (error) {
+    logError('Failed to persist rotated Grok credentials', error);
+  }
+}
+
+async function fetchGrokBillingJson(accessToken: string): Promise<unknown> {
+  return fetchCodexJson(grokBillingUrl(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'X-XAI-Token-Auth': GROK_BILLING_AUTH_MARKER,
+      Accept: 'application/json'
+    }
+  });
+}
+
+export function formatGrokBillingUsage(payload: unknown): string | null {
+  const config = asRecord(asRecord(payload)?.config);
+  if (!config) {
+    return null;
+  }
+
+  const period = asRecord(config.currentPeriod);
+  const periodType = extractString(period?.type);
+  const usedPercent = extractNumberLike(config.creditUsagePercent);
+  const onDemandCap = extractNumberLike(asRecord(config.onDemandCap)?.val);
+  const onDemandUsed = extractNumberLike(asRecord(config.onDemandUsed)?.val);
+  const prepaid = extractNumberLike(asRecord(config.prepaidBalance)?.val);
+
+  const limits: string[] = [];
+  if (periodType === GROK_WEEKLY_PERIOD_TYPE) {
+    const percent = usedPercent !== null ? usedPercent : 0;
+    limits.push(`Weekly ${Math.round(Math.max(0, Math.min(100, percent)))}%`);
+  }
+
+  if (onDemandCap !== null && onDemandCap > 0) {
+    limits.push(`PAYG ${String(onDemandCap)} cap`);
+  } else if (onDemandCap !== null) {
+    limits.push('PAYG off');
+  }
+
+  if (onDemandUsed !== null && onDemandUsed > 0) {
+    limits.push(`on-demand used ${String(onDemandUsed)}`);
+  }
+
+  if (prepaid !== null && prepaid > 0) {
+    limits.push(`prepaid ${String(prepaid)}`);
+  }
+
+  return limits.length
+    ? formatRichStateText({ planText: 'Grok', limitsText: joinMetricParts(limits) })
+    : null;
+}
+
+export async function getNativeGrokQuotaText(tool?: ActiveTool): Promise<string | null> {
+  if (tool && toolFamilyForTool(tool) !== 'grok') {
+    return null;
+  }
+
+  const source = (process.env.DISCORD_CODING_STATUS_GROK_QUOTA_SOURCE || 'auto').trim().toLowerCase();
+  if (source === 'off') {
+    return null;
+  }
+
+  const auth = readGrokAuth();
+  if (!auth) {
+    return null;
+  }
+
+  const withFreshToken = async (): Promise<string | null> => {
+    if (grokTokenNeedsRefresh(auth.entry, auth.entry.key)) {
+      const rotated = await refreshGrokAccessToken(auth.entryKey, auth.entry);
+      if (!rotated) {
+        return null;
+      }
+      persistGrokCredentials(auth.entryKey, rotated);
+      auth.entry = { ...auth.entry, key: rotated.token };
+    }
+    return auth.entry.key;
+  };
+
+  try {
+    let token = await withFreshToken();
+    if (!token) {
+      return null;
+    }
+
+    let payload: unknown;
+    try {
+      payload = await fetchGrokBillingJson(token);
+    } catch (error) {
+      const status = (error as Error & { status?: number })?.status;
+      if (status !== 401 && status !== 403) {
+        throw error;
+      }
+
+      const rotated = await refreshGrokAccessToken(auth.entryKey, auth.entry);
+      if (!rotated) {
+        throw error;
+      }
+      persistGrokCredentials(auth.entryKey, rotated);
+      token = rotated.token;
+      payload = await fetchGrokBillingJson(token);
+    }
+
+    return formatGrokBillingUsage(payload);
+  } catch (error) {
+    logError('Grok quota fetch failed', error);
     return null;
   }
 }
@@ -1037,6 +1393,8 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
     text = await getNativeClaudeQuotaText(tool);
   } else if (toolFamily === 'opencode') {
     text = await getNativeOpencodeQuotaText(tool);
+  } else if (toolFamily === 'grok') {
+    text = await getNativeGrokQuotaText(tool);
   }
 
   if (!text && toolFamily !== 'claude' && PLAN_TEXT_OVERRIDE) {
@@ -1067,4 +1425,56 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
       ? `Usage refresh completed for ${cacheKey}: ${text}.`
       : `Usage refresh unavailable for ${cacheKey}; retaining ${nextText || 'no cached value'}.`
   );
+}
+
+export interface HarnessQuotaStatus {
+  tool: string;
+  status: 'active' | 'unavailable';
+  text: string;
+}
+
+export async function fetchAllHarnessQuotas(): Promise<HarnessQuotaStatus[]> {
+  const [claudeRes, codexRes, grokRes, opencodeRes] = await Promise.allSettled([
+    claudeQuotaEngine.getQuota(claudeQuotaRequestOptions()),
+    getNativeCodexQuotaText(undefined, 'auto'),
+    getNativeGrokQuotaText(undefined),
+    getNativeOpencodeQuotaText(undefined)
+  ]);
+
+  const isClaudeOk = claudeRes.status === 'fulfilled' && claudeRes.value.status !== 'unavailable';
+  const claudeText = isClaudeOk
+    ? (claudeRes.value as { quota: { text: string } }).quota.text
+    : 'Not signed in / API Key';
+
+  const isCodexOk = codexRes.status === 'fulfilled' && Boolean(codexRes.value);
+  const codexText = isCodexOk ? codexRes.value! : 'Not signed in';
+
+  const isGrokOk = grokRes.status === 'fulfilled' && Boolean(grokRes.value);
+  const grokText = isGrokOk ? grokRes.value! : 'Not signed in';
+
+  const isOpencodeOk = opencodeRes.status === 'fulfilled' && Boolean(opencodeRes.value);
+  const opencodeText = isOpencodeOk ? opencodeRes.value! : 'Not signed in';
+
+  return [
+    {
+      tool: 'Claude Code',
+      status: isClaudeOk ? 'active' : 'unavailable',
+      text: claudeText
+    },
+    {
+      tool: 'Codex',
+      status: isCodexOk ? 'active' : 'unavailable',
+      text: codexText
+    },
+    {
+      tool: 'Grok',
+      status: isGrokOk ? 'active' : 'unavailable',
+      text: grokText
+    },
+    {
+      tool: 'OpenCode',
+      status: isOpencodeOk ? 'active' : 'unavailable',
+      text: opencodeText
+    }
+  ];
 }
