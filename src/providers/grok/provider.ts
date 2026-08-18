@@ -3,8 +3,8 @@
 import type { ToolProvider } from '../../core/providers/types';
 import { isGrokProcess } from '../../core/detection/tool-detection';
 
-// Fill with the Discord Application ID for Grok once created.
-export const DEFAULT_GROK_CLIENT_ID = '';
+// Discord Application ID for Grok Code.
+export const DEFAULT_GROK_CLIENT_ID = '1539161996715495445';
 
 export const grokCliProvider: ToolProvider = {
   id: 'grokCli',

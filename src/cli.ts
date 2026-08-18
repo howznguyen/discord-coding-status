@@ -39,6 +39,7 @@ import {
   DEFAULT_CODEX_CLIENT_ID,
   DEFAULT_OPENCODE_CLIENT_ID,
   DEFAULT_PI_CLIENT_ID,
+  DEFAULT_GROK_CLIENT_ID,
   requireToolPresence,
   toolProviders
 } from './providers/registry';
@@ -72,6 +73,7 @@ import {
   CLAUDE_CLIENT_ID,
   OPENCODE_CLIENT_ID,
   PI_CLIENT_ID,
+  GROK_CLIENT_ID,
   DETAIL_LEVEL,
   USAGE_TEXT,
   USAGE_COMMAND,
@@ -450,6 +452,12 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
   );
   setConfigIfCustom(
     next,
+    'DISCORD_CODING_STATUS_GROK_CLIENT_ID',
+    entries.DISCORD_CODING_STATUS_GROK_CLIENT_ID || DEFAULT_GROK_CLIENT_ID,
+    DEFAULT_GROK_CLIENT_ID
+  );
+  setConfigIfCustom(
+    next,
     'DISCORD_CODING_STATUS_DETAIL_LEVEL',
     detailLevel,
     DEFAULT_DETAIL_LEVEL
@@ -563,6 +571,9 @@ function writeSetupConfig(args: Record<string, string | boolean>): void {
   const piClientId = getArgString(args, 'pi-client-id')
     || getArgString(args, 'pi_client_id')
     || PI_CLIENT_ID;
+  const grokClientId = getArgString(args, 'grok-client-id')
+    || getArgString(args, 'grok_client_id')
+    || GROK_CLIENT_ID;
   const detailLevel = getArgString(args, 'detail-level')
     || getArgString(args, 'detail_level')
     || existing.DISCORD_CODING_STATUS_DETAIL_LEVEL
@@ -578,6 +589,7 @@ function writeSetupConfig(args: Record<string, string | boolean>): void {
     DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID: claudeClientId,
     DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID: opencodeClientId,
     DISCORD_CODING_STATUS_PI_CLIENT_ID: piClientId,
+    DISCORD_CODING_STATUS_GROK_CLIENT_ID: grokClientId,
     DISCORD_CODING_STATUS_DETAIL_LEVEL: detailLevel,
     DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE: quotaSource
   });
@@ -1323,6 +1335,7 @@ function printStartupStatus(): void {
       claudeClientId: CLAUDE_CLIENT_ID,
       opencodeClientId: OPENCODE_CLIENT_ID,
       piClientId: PI_CLIENT_ID,
+      grokClientId: GROK_CLIENT_ID,
       installDirectory: getInstallDirectory()
     }, null, 2));
     return;
@@ -1347,6 +1360,7 @@ function printStartupStatus(): void {
       claudeClientId: CLAUDE_CLIENT_ID,
       opencodeClientId: OPENCODE_CLIENT_ID,
       piClientId: PI_CLIENT_ID,
+      grokClientId: GROK_CLIENT_ID,
       installDirectory: getInstallDirectory()
     }, null, 2));
     return;
@@ -1677,6 +1691,7 @@ function runSetupCommand(command: string): boolean {
       claudeClientId: CLAUDE_CLIENT_ID,
       opencodeClientId: OPENCODE_CLIENT_ID,
       piClientId: PI_CLIENT_ID,
+      grokClientId: GROK_CLIENT_ID,
       detectedTools: detections,
       codexHooks: {
         install: installCodexHookSet,
@@ -1863,6 +1878,7 @@ async function main(): Promise<void> {
     claudeClientId: CLAUDE_CLIENT_ID,
     opencodeClientId: OPENCODE_CLIENT_ID,
     piClientId: PI_CLIENT_ID,
+    grokClientId: GROK_CLIENT_ID,
     configFile: CONFIG_FILE,
     stateFile: STATE_FILE
   })) {

@@ -65,6 +65,7 @@ The state file is watched for immediate changes. A 10-second process/polling loo
 | Claude Desktop | Process detection | — | Claude Code |
 | OpenCode CLI | Process detection | — | OpenCode |
 | Pi | Process detection | — | Pi |
+| Grok Code | Process detection | — | Grok Code |
 
 If multiple tools are active together, the daemon updates each tool's own RPC client. Discord Desktop decides which activities are visible in its interface.
 
@@ -277,10 +278,11 @@ The built-in application IDs are:
 - Claude Code: `1521213655092428923`
 - OpenCode: `1538957549364322404`
 - Pi: `1538957711503396986`
+- Grok Code: `1539161996715495445`
 
 Tool-specific IDs let each tool use a separate Discord identity. Custom image keys work only when the matching asset already exists in that Discord application.
 
-## Codex quota
+## Codex and OpenCode Go quota
 
 Codex quota support is experimental because the ChatGPT usage endpoint and Codex app-server RPC are not public stable APIs.
 

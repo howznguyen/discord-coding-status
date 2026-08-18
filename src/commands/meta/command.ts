@@ -15,6 +15,7 @@ export interface MetaCommandContext {
   claudeClientId: string;
   opencodeClientId: string;
   piClientId: string;
+  grokClientId: string;
   configFile: string;
   stateFile: string;
 }
@@ -55,6 +56,7 @@ ${pc.bold('Default Discord Application IDs:')}
   Claude Code: ${accent(context.claudeClientId)}
   OpenCode: ${accent(context.opencodeClientId)}
   Pi: ${accent(context.piClientId)}
+  Grok: ${accent(context.grokClientId)}
 
 ${pc.bold('Config file:')}
   ${accent(context.configFile)}
