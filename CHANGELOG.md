@@ -18,10 +18,12 @@ This project follows semantic versioning once tagged releases begin.
 - Added an approval-gated release-candidate workflow that builds a draft artifact before publishing npm and the GitHub Release together.
 - Fixed setup probes so mocked and real platform paths use the target platform's path semantics on every CI host.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-18
 
 - Added OpenCode Go usage quota (rolling/weekly/monthly windows) fetched from the official `/v1/usage` endpoint using an env API key.
 - Added Grok Code as a built-in provider with process detection, setup discovery, and a dedicated Discord application identity (`1539161996715495445`).
+
+## [Unreleased]
 
 ## [1.4.1] - 2026-08-18
 
@@ -42,10 +44,12 @@ This project follows semantic versioning once tagged releases begin.
 - Added an approval-gated release-candidate workflow that builds a draft artifact before publishing npm and the GitHub Release together.
 - Fixed setup probes so mocked and real platform paths use the target platform's path semantics on every CI host.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-18
 
 - Added OpenCode Go usage quota (rolling/weekly/monthly windows) fetched from the official `/v1/usage` endpoint using an env API key.
 - Added Grok Code as a built-in provider with process detection, setup discovery, and a dedicated Discord application identity (`1539161996715495445`).
+
+## [Unreleased]
 
 - Fixed Windows `setup` running the daemon in a visible console window: the scheduled task now launches through a hidden VBScript wrapper.
 - Fixed Windows `setup` failing with "Access is denied." when creating the logon scheduled task: stderr is now surfaced and task creation retries elevated through UAC (or prompts the user to run setup from an Administrator terminal).
