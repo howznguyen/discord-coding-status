@@ -1191,9 +1191,8 @@ function writeWindowsLauncher(scriptPath: string): string {
   return launcherPath;
 }
 
-function installWindowsScheduledTask(scriptPath: string, startNow: boolean): string {
-  const launcherPath = writeWindowsLauncher(scriptPath);
-  execFileSync('schtasks', [
+function windowsScheduledTaskArgs(launcherPath: string): string[] {
+  return [
     '/Create',
     '/TN',
     WINDOWS_TASK_NAME,
@@ -1202,11 +1201,51 @@ function installWindowsScheduledTask(scriptPath: string, startNow: boolean): str
     '/TR',
     `"${launcherPath}"`,
     '/F'
-  ], { stdio: 'ignore' });
+  ];
+}
+
+function execFileStderr(error: unknown): string {
+  if (!error || typeof error !== 'object') {
+    return '';
+  }
+
+  const stderr = (error as { stderr?: Buffer | string }).stderr;
+  return String(stderr || '').trim();
+}
+
+function installWindowsScheduledTask(scriptPath: string, startNow: boolean): string {
+  const launcherPath = writeWindowsLauncher(scriptPath);
+  const args = windowsScheduledTaskArgs(launcherPath);
+
+  try {
+    execFileSync('schtasks', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (error) {
+    const detail = execFileStderr(error);
+
+    try {
+      // The current session lacks permission to create a logon task; retry
+      // elevated through UAC so the user can approve the prompt.
+      const argumentList = args.map((arg) => (arg.startsWith('"') ? arg : `"${arg}"`)).join(' ');
+      execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Start-Process -FilePath schtasks -ArgumentList '${argumentList}' -Verb RunAs -Wait`
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (elevationError) {
+      const elevationDetail = execFileStderr(elevationError);
+      throw new Error(
+        `Failed to create the scheduled task (${detail || 'Access is denied'}. `
+        + `Run setup from an Administrator terminal, or accept the UAC prompt.`
+        + `${elevationDetail ? ` Elevated attempt failed: ${elevationDetail}` : ''})`
+      );
+    }
+  }
 
   if (startNow) {
     try {
-      execFileSync('schtasks', ['/Run', '/TN', WINDOWS_TASK_NAME], { stdio: 'ignore' });
+      execFileSync('schtasks', ['/Run', '/TN', WINDOWS_TASK_NAME], { stdio: ['ignore', 'ignore', 'pipe'] });
     } catch (_) {
       // The task is installed even if immediate start fails.
     }

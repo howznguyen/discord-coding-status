@@ -20,6 +20,8 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+- Fixed Windows `setup` failing with "Access is denied." when creating the logon scheduled task: stderr is now surfaced and task creation retries elevated through UAC (or prompts the user to run setup from an Administrator terminal).
+
 - Added built-in OpenCode and Pi providers with process detection, setup discovery, and separate Discord application identities (`1538957549364322404` for OpenCode, `1538957711503396986` for Pi), including config aliases and editor fields.
 - Added ChatGPT desktop (Codex) and Claude Desktop install/process detection on macOS and Windows, while keeping embedded app servers and the Claude Code URL handler separate from CLI detection.
 - Split command policy, platform adapters, core detection, and colocated domain contracts out of the CLI entrypoint; standardized source dependencies on TypeScript imports and added automated architecture-boundary coverage.
