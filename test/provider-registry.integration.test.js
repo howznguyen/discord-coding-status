@@ -16,6 +16,9 @@ const {
   resolveDiscordApplications
 } = require('../dist/providers/discord');
 const { codexDesktopProvider } = require('../dist/providers/codex/provider');
+const { opencodeCliProvider } = require('../dist/providers/opencode/provider');
+const { piCliProvider } = require('../dist/providers/pi/provider');
+const { toolProviders } = require('../dist/providers/registry');
 
 const openCodeProvider = {
   id: 'openCode',
@@ -200,11 +203,63 @@ test('provider descriptors enforce macOS bundle identity and required runtime pa
   assert.equal(rejected[0].detected, false);
 });
 
-test('registry validation rejects ambiguous provider identities', () => {
-  assert.throws(
-    () => validateToolProviders([openCodeProvider, { ...openCodeProvider }]),
-    /Duplicate tool provider id/
+test('built-in registry accepts the real OpenCode and Pi providers', () => {
+  assert.doesNotThrow(() => validateToolProviders(toolProviders));
+  const ids = toolProviders.map((provider) => provider.id);
+  assert.ok(ids.includes('opencodeCli'));
+  assert.ok(ids.includes('piCli'));
+  assert.equal(findToolProviderByAlias('opencode', 'cli', toolProviders).id, 'opencodeCli');
+  assert.equal(findToolProviderByAlias('pi', 'cli', toolProviders).id, 'piCli');
+});
+
+test('real OpenCode and Pi providers expose built-in Discord defaults', () => {
+  const applications = resolveDiscordApplications(toolProviders, (name, fallback = '') => fallback);
+  const opencode = applications.get('opencode');
+  const pi = applications.get('pi');
+
+  assert.equal(opencode.clientId, '1538957549364322404');
+  assert.equal(opencode.label, 'OpenCode');
+  assert.equal(opencode.clientIdEnvironment, 'DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID');
+  assert.equal(pi.clientId, '1538957711503396986');
+  assert.equal(pi.label, 'Pi');
+  assert.equal(pi.clientIdEnvironment, 'DISCORD_CODING_STATUS_PI_CLIENT_ID');
+
+  const opencodeTool = discordApplicationForTool(
+    { providerId: 'opencodeCli', key: 'opencodeCli', family: 'opencode', details: 'Using OpenCode', state: 'OpenCode CLI' },
+    toolProviders,
+    applications
   );
+  const piTool = discordApplicationForTool(
+    { providerId: 'piCli', key: 'piCli', family: 'pi', details: 'Using Pi', state: 'Pi coding agent' },
+    toolProviders,
+    applications
+  );
+  assert.equal(opencodeTool.clientId, '1538957549364322404');
+  assert.equal(piTool.clientId, '1538957711503396986');
+});
+
+test('real OpenCode and Pi providers participate in setup detection', () => {
+  const detections = detectSetupTools({
+    platform: 'linux',
+    homeDirectory: '/home/example',
+    pathExists: () => true,
+    executeFile: (command, args) => {
+      if (command === 'which' && args[0] === 'opencode') {
+        return '/usr/local/bin/opencode\n';
+      }
+      if (command === 'which' && args[0] === 'pi') {
+        return '/home/example/.bun/bin/pi\n';
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    }
+  }, toolProviders);
+
+  const opencode = detections.find((item) => item.key === 'opencodeCli');
+  const pi = detections.find((item) => item.key === 'piCli');
+  assert.equal(opencode.detected, true);
+  assert.equal(opencode.detail, '/usr/local/bin/opencode');
+  assert.equal(pi.detected, true);
+  assert.equal(pi.detail, '/home/example/.bun/bin/pi');
 });
 
 test('provider Discord metadata resolves without CLI family conditionals', () => {
@@ -237,4 +292,11 @@ test('provider Discord metadata resolves without CLI family conditionals', () =>
     imageKey: 'opencode'
   });
   assert.equal(findToolProviderByAlias('open-code', 'cli', [openCodeProvider]).id, 'openCode');
+});
+
+test('registry validation rejects ambiguous provider identities', () => {
+  assert.throws(
+    () => validateToolProviders([openCodeProvider, { ...openCodeProvider }]),
+    /Duplicate tool provider id/
+  );
 });

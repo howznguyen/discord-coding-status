@@ -32,4 +32,6 @@ export interface ActiveTool extends ToolDefinition {
   projectName?: string | null;
   packageName?: string | null;
   claudeQuotaEligible?: boolean | null;
+  title?: string | null;
+  sessionCount?: number | null;
 }

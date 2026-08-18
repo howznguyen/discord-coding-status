@@ -8,6 +8,8 @@ const {
   isClaudeDesktopProcess,
   isCodexCliProcess,
   isCodexDesktopProcess,
+  isOpencodeProcess,
+  isPiProcess,
   parseWindowsStartApps,
   windowsDesktopAppDetail
 } = require('../dist/core/detection/tool-detection');
@@ -97,4 +99,48 @@ test('package-manager wrappers remain valid CLI processes', () => {
   assert.equal(isClaudeDesktopProcess(claudeWrapper), false);
   assert.equal(isCodexCliProcess(codexWrapper), true);
   assert.equal(isCodexDesktopProcess(codexWrapper), false);
+});
+
+test('OpenCode CLI processes are detected without capturing other tools', () => {
+  const binary = '/opt/homebrew/bin/opencode';
+  const windowsBinary = 'C:\\Tools\\opencode.exe';
+  const tui = {
+    line: '/usr/local/bin/opencode serve',
+    executablePath: '/usr/local/bin/opencode',
+    commandLine: 'opencode serve'
+  };
+
+  for (const process of [binary, windowsBinary, tui]) {
+    assert.equal(isOpencodeProcess(process), true);
+  }
+
+  for (const unrelated of [
+    'node /usr/local/bin/opencode-helper.js',
+    '/usr/local/bin/opencodex',
+    '/usr/local/bin/opencode-backup',
+    'codex',
+    'claude'
+  ]) {
+    assert.equal(isOpencodeProcess(unrelated), false);
+  }
+});
+
+test('Pi CLI processes are detected without capturing unrelated `pi` tokens', () => {
+  const binary = '/Users/example/.bun/bin/pi';
+  const npmWrapper = 'node /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js';
+  const bareTui = 'pi --model sonnet';
+
+  for (const process of [binary, npmWrapper, bareTui]) {
+    assert.equal(isPiProcess(process), true);
+  }
+
+  for (const unrelated of [
+    'python3 -m pip install pi',
+    '/usr/bin/pi-hole',
+    'node ping',
+    'codex',
+    'claude'
+  ]) {
+    assert.equal(isPiProcess(unrelated), false);
+  }
 });

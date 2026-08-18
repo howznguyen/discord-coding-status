@@ -11,6 +11,8 @@ export const DEFAULT_ACTIVITY_STYLE: ActivityStyle = 'fun';
 export const JSON_CONFIG_ALIASES: Record<string, string> = {
   codexClientId: 'DISCORD_CODING_STATUS_CODEX_CLIENT_ID',
   claudeClientId: 'DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID',
+  opencodeClientId: 'DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID',
+  piClientId: 'DISCORD_CODING_STATUS_PI_CLIENT_ID',
   clientId: 'DISCORD_CLIENT_ID',
   detailLevel: 'DISCORD_CODING_STATUS_DETAIL_LEVEL',
   quotaSource: 'DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE',
@@ -94,6 +96,26 @@ export function createConfigEditorFields(defaultStateFile: string): ConfigEditor
     {
       key: 'DISCORD_CODING_STATUS_CODEX_IMAGE_KEY',
       label: 'Codex image key',
+      defaultValue: ''
+    },
+    {
+      key: 'DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID',
+      label: 'OpenCode client ID',
+      defaultValue: ''
+    },
+    {
+      key: 'DISCORD_CODING_STATUS_OPENCODE_IMAGE_KEY',
+      label: 'OpenCode image key',
+      defaultValue: ''
+    },
+    {
+      key: 'DISCORD_CODING_STATUS_PI_CLIENT_ID',
+      label: 'Pi client ID',
+      defaultValue: ''
+    },
+    {
+      key: 'DISCORD_CODING_STATUS_PI_IMAGE_KEY',
+      label: 'Pi image key',
       defaultValue: ''
     },
     {

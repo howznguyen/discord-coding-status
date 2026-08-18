@@ -4,8 +4,15 @@ import type { ToolProvider } from '../core/providers/types';
 import type { ActiveTool, ToolDefinition } from '../core/tools/types';
 import { claudeProviders, DEFAULT_CLAUDE_CLIENT_ID } from './claude/provider';
 import { codexProviders, DEFAULT_CODEX_CLIENT_ID } from './codex/provider';
+import { opencodeProviders, DEFAULT_OPENCODE_CLIENT_ID } from './opencode/provider';
+import { piProviders, DEFAULT_PI_CLIENT_ID } from './pi/provider';
 
-export { DEFAULT_CLAUDE_CLIENT_ID, DEFAULT_CODEX_CLIENT_ID };
+export {
+  DEFAULT_CLAUDE_CLIENT_ID,
+  DEFAULT_CODEX_CLIENT_ID,
+  DEFAULT_OPENCODE_CLIENT_ID,
+  DEFAULT_PI_CLIENT_ID
+};
 
 export function validateToolProviders(providers: readonly ToolProvider[]): void {
   const providerIds = new Set<string>();
@@ -51,7 +58,9 @@ export function validateToolProviders(providers: readonly ToolProvider[]): void 
 
 const builtInProviders: readonly ToolProvider[] = [
   ...claudeProviders,
-  ...codexProviders
+  ...codexProviders,
+  ...opencodeProviders,
+  ...piProviders
 ];
 validateToolProviders(builtInProviders);
 

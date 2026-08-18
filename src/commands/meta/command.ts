@@ -1,6 +1,8 @@
 'use strict';
 
-import chalk from 'chalk';
+import { createColors } from 'picocolors';
+
+const pc = createColors(Boolean(process.stdout?.isTTY && !process.env.NO_COLOR));
 
 export interface MetaCommandContext {
   appTitle: string;
@@ -11,18 +13,20 @@ export interface MetaCommandContext {
   license: string;
   codexClientId: string;
   claudeClientId: string;
+  opencodeClientId: string;
+  piClientId: string;
   configFile: string;
   stateFile: string;
 }
 
 export function renderMetaHelp(context: MetaCommandContext): string {
-  const accent = (value: string): string => chalk.cyan(value);
-  const commandText = (value: string): string => chalk.bold(value);
+  const accent = (value: string): string => pc.cyan(value);
+  const commandText = (value: string): string => pc.bold(value);
 
-  return `${chalk.bold.cyan(context.appTitle)} ${chalk.dim(context.version)}
-${chalk.dim('Local Discord Rich Presence for Codex and Claude Code.')}
+  return `${pc.bold(pc.cyan(context.appTitle))} ${pc.dim(context.version)}
+${pc.dim('Local Discord Rich Presence for Codex and Claude Code.')}
 
-${chalk.bold('Usage:')}
+${pc.bold('Usage:')}
   discord-coding-status setup                 Install startup and start the daemon
   discord-coding-status config                Open display TUI with live preview
   discord-coding-status config --advanced     Edit advanced config prompts
@@ -46,23 +50,25 @@ ${chalk.bold('Usage:')}
   discord-coding-status quota --tool claude
   discord-coding-status --version
 
-${chalk.bold('Default Discord Application IDs:')}
+${pc.bold('Default Discord Application IDs:')}
   Codex: ${accent(context.codexClientId)}
   Claude Code: ${accent(context.claudeClientId)}
+  OpenCode: ${accent(context.opencodeClientId)}
+  Pi: ${accent(context.piClientId)}
 
-${chalk.bold('Config file:')}
+${pc.bold('Config file:')}
   ${accent(context.configFile)}
 
-${chalk.bold('State file:')}
+${pc.bold('State file:')}
   ${accent(context.stateFile)}
 
-${chalk.bold('Project:')}
+${pc.bold('Project:')}
   Author: ${accent(context.author)}
   Website: ${accent(context.website)}
   Repository: ${accent(context.repository)}
   License: ${accent(context.license)}
 
-${chalk.bold('Examples:')}
+${pc.bold('Examples:')}
   ${commandText('npx -y discord-coding-status@latest')}
   ${commandText('npx -y discord-coding-status@latest setup')}
   ${commandText('npx -y discord-coding-status@latest config')}

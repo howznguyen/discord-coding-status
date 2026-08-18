@@ -143,3 +143,19 @@ export function isCodexCliProcess(value: ProcessDescriptor | string): boolean {
     || executable === 'codex.exe'
     || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?codex(?:[/.][^\s]*)?(?:\s|$)/.test(text);
 }
+
+export function isOpencodeProcess(value: ProcessDescriptor | string): boolean {
+  const text = normalizedProcessText(value).replace(/\\/g, '/');
+  const executable = executableBasename(value);
+  return executable === 'opencode'
+    || executable === 'opencode.exe'
+    || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?opencode(?:[/.][^\s]*)?(?:\s|$)/.test(text);
+}
+
+export function isPiProcess(value: ProcessDescriptor | string): boolean {
+  const text = normalizedProcessText(value).replace(/\\/g, '/');
+  const executable = executableBasename(value);
+  return executable === 'pi'
+    || executable === 'pi.exe'
+    || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*pi-coding-agent(?:[/.][^\s]*)?(?:\s|$)/.test(text);
+}

@@ -12,6 +12,69 @@ const {
   waitFor
 } = require('./helpers');
 
+test('multiple active sessions of one tool are visible through a session count marker', async (t) => {
+  const { env, rpcLogFile } = createTestEnvironment(t);
+  const daemon = startDaemon(t, env);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  const base = [
+    'hook',
+    '--tool', 'codex',
+    '--surface', 'cli',
+    '--status', 'running'
+  ];
+  await runCli([...base, '--session-id', 'multi-a', '--cwd', process.cwd(), '--activity', 'First alpha session'], env);
+  await runCli([...base, '--session-id', 'multi-b', '--cwd', path.join(process.cwd(), 'scripts'), '--activity', 'Second beta session'], env);
+
+  const activity = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.activity.details.includes('👥 2')
+    ),
+    'the session count marker to reach Discord RPC'
+  );
+  assert.match(activity.activity.details, /^👥 2 \|/);
+  assert.match(activity.activity.details, /Second beta session/);
+  assert.equal(daemon.output().stderr, '');
+});
+
+test('activity status is decorated with an emoji on the details line', async (t) => {
+  const { env, rpcLogFile } = createTestEnvironment(t);
+  const daemon = startDaemon(t, env);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  await runCli([
+    'hook',
+    '--tool', 'pi',
+    '--surface', 'cli',
+    '--status', 'thinking',
+    '--session-id', 'emoji-session',
+    '--cwd', process.cwd(),
+    '--model', 'deepseek-v4-flash',
+    '--effort', 'high',
+    '--activity', 'Thinking deeply'
+  ], env);
+
+  const activity = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.activity.details.includes('Thinking deeply')
+    ),
+    'the emoji-decorated activity to reach Discord RPC'
+  );
+  assert.match(activity.activity.details, /^[🧠⚡✨⏳✋🛂💤⏸️🐛👾]+ Thinking deeply \|/u);
+  assert.match(activity.activity.state, /^deepseek-v4-flash · high/);
+  assert.equal(daemon.output().stderr, '');
+});
+
 test('hook changes update and clear Discord Rich Presence without waiting for polling', async (t) => {
   const { env, rpcLogFile } = createTestEnvironment(t);
   const daemon = startDaemon(t, env);
