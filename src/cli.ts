@@ -8,7 +8,9 @@ import * as readlineCore from 'node:readline';
 import * as readline from 'node:readline/promises';
 import { exec, execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import chalk from 'chalk';
+import { createColors } from 'picocolors';
+
+const pc = createColors(Boolean(process.stdout?.isTTY && !process.env.NO_COLOR));
 import DiscordRPC from 'discord-rpc';
 import {
   CLAUDE_LIFECYCLE_HOOK_EVENTS,
@@ -42,6 +44,8 @@ import {
 import {
   DEFAULT_CLAUDE_CLIENT_ID,
   DEFAULT_CODEX_CLIENT_ID,
+  DEFAULT_OPENCODE_CLIENT_ID,
+  DEFAULT_PI_CLIENT_ID,
   findToolProviderByAlias,
   requireToolPresence,
   toolProviders
@@ -125,6 +129,8 @@ const APP_REPOSITORY = 'https://github.com/howznguyen/discord-coding-status';
 const APP_LICENSE = 'MIT';
 const MACOS_LAUNCH_AGENT_ID = 'io.github.discord-coding-status.daemon';
 const WINDOWS_TASK_NAME = 'DiscordCodingStatus';
+const PI_EXTENSION_TARGET = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'discord-coding-status.ts');
+const OPENCODE_PLUGIN_TARGET = path.join(os.homedir(), '.config', 'opencode', 'plugins', 'discord-coding-status.js');
 const USER_DATA_DIR = path.join(os.homedir(), APP_ID);
 const CONFIG_DIR = getConfigDirectory();
 const CONFIG_FILE = path.join(USER_DATA_DIR, 'config.json');
@@ -151,6 +157,8 @@ loadEnvironmentFiles(CONFIG_FILE, LEGACY_CONFIG_FILE, process.cwd(), logError);
 const DISCORD_APPLICATIONS = resolveDiscordApplications(toolProviders, envValue);
 const CODEX_CLIENT_ID = DISCORD_APPLICATIONS.get('codex')?.clientId || '';
 const CLAUDE_CLIENT_ID = DISCORD_APPLICATIONS.get('claude')?.clientId || '';
+const OPENCODE_CLIENT_ID = DISCORD_APPLICATIONS.get('opencode')?.clientId || '';
+const PI_CLIENT_ID = DISCORD_APPLICATIONS.get('pi')?.clientId || '';
 const FALLBACK_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || '').trim();
 const LARGE_IMAGE_KEY = (process.env.DISCORD_LARGE_IMAGE_KEY || '').trim();
 const SMALL_IMAGE_KEY = (process.env.DISCORD_SMALL_IMAGE_KEY || '').trim();
@@ -234,6 +242,26 @@ function getConfigDirectory(): string {
   }
 
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), APP_ID);
+}
+
+const STATUS_EMOJI: Record<string, string> = {
+  active: '⚡',
+  running: '⚡',
+  thinking: '🧠',
+  streaming: '✨',
+  waiting: '⏳',
+  waiting_input: '✋',
+  waiting_approval: '🛂',
+  idle: '💤',
+  paused: '⏸️',
+  error: '🐛'
+};
+
+const DEFAULT_STATUS_EMOJI = '👾';
+
+function emojiForStatus(value: string | null | undefined): string | null {
+  const normalized = normalizeStatus(value);
+  return STATUS_EMOJI[normalized] || DEFAULT_STATUS_EMOJI;
 }
 
 const STATUS_MESSAGES: Record<string, string[]> = {
@@ -380,27 +408,27 @@ const usageRefreshesByKey = new Map<string, Promise<void>>();
 const claudeUsageRevisionBySession = new Map<string, number>();
 
 function dim(value: string): string {
-  return chalk.dim(value);
+  return pc.dim(value);
 }
 
 function success(value: string): string {
-  return chalk.green(value);
+  return pc.green(value);
 }
 
 function warning(value: string): string {
-  return chalk.yellow(value);
+  return pc.yellow(value);
 }
 
 function danger(value: string): string {
-  return chalk.red(value);
+  return pc.red(value);
 }
 
 function accent(value: string): string {
-  return chalk.cyan(value);
+  return pc.cyan(value);
 }
 
 function title(value: string): string {
-  return chalk.bold.cyan(value);
+  return pc.bold(pc.cyan(value));
 }
 
 function shouldShowProject(): boolean {
@@ -1375,13 +1403,73 @@ function getRuntimeScriptPath(baseDirectory = getPackageRoot()): string {
   return path.join(baseDirectory, 'dist', 'cli.js');
 }
 
-function printSetupDetections(detections: SetupToolDetection[]): void {
-  console.log(title('Detected tools:'));
-  for (const item of detections) {
-    const marker = item.detected ? success('found') : dim('not found');
-    const detail = item.detail ? dim(` - ${item.detail}`) : '';
-    console.log(`  ${marker} ${item.name}${detail}`);
+function detectionFamilyName(key: string): string {
+  if (key.startsWith('codex')) {
+    return 'Codex';
   }
+  if (key.startsWith('claude')) {
+    return 'Claude';
+  }
+  if (key.startsWith('opencode')) {
+    return 'OpenCode';
+  }
+  if (key.startsWith('pi')) {
+    return 'Pi';
+  }
+  return titleCase(key);
+}
+
+function printSessionIntegrations(): void {
+  const rows: Array<{ name: string; installed: boolean; target: string }> = [
+    {
+      name: 'Pi extension',
+      installed: fs.existsSync(PI_EXTENSION_TARGET),
+      target: PI_EXTENSION_TARGET
+    },
+    {
+      name: 'OpenCode plugin',
+      installed: fs.existsSync(OPENCODE_PLUGIN_TARGET),
+      target: OPENCODE_PLUGIN_TARGET
+    }
+  ];
+
+  console.log('');
+  console.log(title('Session integrations'));
+  for (const row of rows) {
+    const marker = row.installed ? success('✔') : dim('✖');
+    const hint = row.installed
+      ? accent(compactHomePath(row.target))
+      : dim('not installed — copy the bundled file to this path to enable');
+    console.log(`  ${marker} ${row.name.padEnd(16)} ${hint}`);
+  }
+}
+
+function printSetupDetections(detections: SetupToolDetection[]): void {
+  const families = new Map<string, SetupToolDetection[]>();
+  for (const item of detections) {
+    const family = detectionFamilyName(item.key);
+    const items = families.get(family) || [];
+    items.push(item);
+    families.set(family, items);
+  }
+
+  const maxNameLength = Math.max(...detections.map((item) => item.name.length));
+  const detectedCount = detections.filter((item) => item.detected).length;
+
+  console.log('');
+  console.log(title('Detected tools'));
+  for (const [family, items] of families) {
+    console.log(`  ${pc.bold(family)}`);
+    for (const item of items) {
+      const marker = item.detected ? success('✔') : dim('✖');
+      const name = item.name.padEnd(maxNameLength);
+      const detail = item.detected
+        ? accent(item.detail || 'installed')
+        : dim('not installed');
+      console.log(`    ${marker} ${name}  ${detail}`);
+    }
+  }
+  console.log(dim(`  ${detectedCount} of ${detections.length} tool installations found.`));
 }
 
 function copyPathIfExists(source: string, target: string): void {
@@ -1558,6 +1646,18 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
   );
   setConfigIfCustom(
     next,
+    'DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID',
+    entries.DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID || DEFAULT_OPENCODE_CLIENT_ID,
+    DEFAULT_OPENCODE_CLIENT_ID
+  );
+  setConfigIfCustom(
+    next,
+    'DISCORD_CODING_STATUS_PI_CLIENT_ID',
+    entries.DISCORD_CODING_STATUS_PI_CLIENT_ID || DEFAULT_PI_CLIENT_ID,
+    DEFAULT_PI_CLIENT_ID
+  );
+  setConfigIfCustom(
+    next,
     'DISCORD_CODING_STATUS_DETAIL_LEVEL',
     detailLevel,
     DEFAULT_DETAIL_LEVEL
@@ -1594,6 +1694,8 @@ function compactConfigEntries(entries: Record<string, string>): Record<string, s
   for (const key of [
     'DISCORD_CODING_STATUS_CLAUDE_IMAGE_KEY',
     'DISCORD_CODING_STATUS_CODEX_IMAGE_KEY',
+    'DISCORD_CODING_STATUS_OPENCODE_IMAGE_KEY',
+    'DISCORD_CODING_STATUS_PI_IMAGE_KEY',
     'DISCORD_LARGE_IMAGE_KEY',
     'DISCORD_SMALL_IMAGE_KEY',
     'DISCORD_CODING_STATUS_PLAN_TEXT',
@@ -1663,6 +1765,12 @@ function writeSetupConfig(args: Record<string, string | boolean>): void {
   const claudeClientId = getArgString(args, 'claude-client-id')
     || getArgString(args, 'claude_client_id')
     || CLAUDE_CLIENT_ID;
+  const opencodeClientId = getArgString(args, 'opencode-client-id')
+    || getArgString(args, 'opencode_client_id')
+    || OPENCODE_CLIENT_ID;
+  const piClientId = getArgString(args, 'pi-client-id')
+    || getArgString(args, 'pi_client_id')
+    || PI_CLIENT_ID;
   const detailLevel = getArgString(args, 'detail-level')
     || getArgString(args, 'detail_level')
     || existing.DISCORD_CODING_STATUS_DETAIL_LEVEL
@@ -1676,6 +1784,8 @@ function writeSetupConfig(args: Record<string, string | boolean>): void {
     DISCORD_CLIENT_ID: fallbackClientId,
     DISCORD_CODING_STATUS_CODEX_CLIENT_ID: codexClientId,
     DISCORD_CODING_STATUS_CLAUDE_CLIENT_ID: claudeClientId,
+    DISCORD_CODING_STATUS_OPENCODE_CLIENT_ID: opencodeClientId,
+    DISCORD_CODING_STATUS_PI_CLIENT_ID: piClientId,
     DISCORD_CODING_STATUS_DETAIL_LEVEL: detailLevel,
     DISCORD_CODING_STATUS_CODEX_QUOTA_SOURCE: quotaSource
   });
@@ -1723,7 +1833,7 @@ async function promptConfigField(
 
 function printEffectiveConfig(entries: Record<string, string>): void {
   console.log(title('Discord Coding Status advanced config'));
-  console.log(`${chalk.bold('File:')} ${accent(CONFIG_FILE)}`);
+  console.log(`${pc.bold('File:')} ${accent(CONFIG_FILE)}`);
   console.log(dim('Enter keeps the current/default value. Use "-" to clear an override.'));
   console.log('');
 
@@ -1731,7 +1841,7 @@ function printEffectiveConfig(entries: Record<string, string>): void {
     const override = entries[field.key] || '';
     const effective = override || field.defaultValue;
     const suffix = override ? '' : dim(' (default)');
-    console.log(`  ${chalk.bold(field.label)}: ${formatConfigValue(effective)}${suffix}`);
+    console.log(`  ${pc.bold(field.label)}: ${formatConfigValue(effective)}${suffix}`);
   }
 
   console.log('');
@@ -1876,7 +1986,7 @@ function renderConfigTui(
     title(`${APP_TITLE} · Display Config`),
     dim(`File: ${truncateTerminalText(compactHomePath(CONFIG_FILE), terminalWidth - 6)}`),
     '',
-    chalk.bold('LIVE PREVIEW') + dim('  sample data · Discord uses up to 128 characters per line'),
+    pc.bold('LIVE PREVIEW') + dim('  sample data · Discord uses up to 128 characters per line'),
     `  ${dim('Top   ')} ${preview.top ? truncateTerminalText(preview.top, previewWidth) : dim('(hidden)')}`,
     `  ${dim('Bottom')} ${preview.bottom ? truncateTerminalText(preview.bottom, previewWidth) : dim('(hidden)')}`,
     ''
@@ -1886,7 +1996,7 @@ function renderConfigTui(
   CONFIG_TUI_ITEMS.forEach((item, index) => {
     if (item.section !== currentSection) {
       currentSection = item.section;
-      lines.push(chalk.bold(item.section.toUpperCase()));
+      lines.push(pc.bold(item.section.toUpperCase()));
     }
 
     const selected = index === selectedIndex;
@@ -1904,7 +2014,7 @@ function renderConfigTui(
       controlLength = value.length + 4;
     }
 
-    const label = selected ? chalk.bold(item.label) : item.label;
+    const label = selected ? pc.bold(item.label) : item.label;
     lines.push(` ${pointer} ${control}${' '.repeat(Math.max(1, 18 - controlLength))} ${label}`);
   });
 
@@ -2187,8 +2297,8 @@ async function runConfigCommand(command: string): Promise<boolean> {
   if (args.preview) {
     const preview = configPreviewLines(existing, createConfigPreviewSamples());
     console.log(title(`${APP_TITLE} preview`));
-    console.log(`${chalk.bold('Top:')} ${preview.top || dim('(hidden)')}`);
-    console.log(`${chalk.bold('Bottom:')} ${preview.bottom || dim('(hidden)')}`);
+    console.log(`${pc.bold('Top:')} ${preview.top || dim('(hidden)')}`);
+    console.log(`${pc.bold('Bottom:')} ${preview.bottom || dim('(hidden)')}`);
     return true;
   }
 
@@ -2370,6 +2480,8 @@ function printStartupStatus(): void {
       stateFile: STATE_FILE,
       codexClientId: CODEX_CLIENT_ID,
       claudeClientId: CLAUDE_CLIENT_ID,
+      opencodeClientId: OPENCODE_CLIENT_ID,
+      piClientId: PI_CLIENT_ID,
       installDirectory: getInstallDirectory()
     }, null, 2));
     return;
@@ -2392,6 +2504,8 @@ function printStartupStatus(): void {
       stateFile: STATE_FILE,
       codexClientId: CODEX_CLIENT_ID,
       claudeClientId: CLAUDE_CLIENT_ID,
+      opencodeClientId: OPENCODE_CLIENT_ID,
+      piClientId: PI_CLIENT_ID,
       installDirectory: getInstallDirectory()
     }, null, 2));
     return;
@@ -2763,6 +2877,8 @@ function runSetupCommand(command: string): boolean {
       installDirectory: getInstallDirectory(),
       codexClientId: CODEX_CLIENT_ID,
       claudeClientId: CLAUDE_CLIENT_ID,
+      opencodeClientId: OPENCODE_CLIENT_ID,
+      piClientId: PI_CLIENT_ID,
       detectedTools: detections,
       codexHooks: {
         install: installCodexHookSet,
@@ -2793,28 +2909,42 @@ function runSetupCommand(command: string): boolean {
     ? installClaudeHooks(scriptPath)
     : null;
 
+  console.log('');
   console.log(success(`${APP_TITLE} installed.`));
   printSetupDetections(detections);
-  console.log(`${chalk.bold('Config:')} ${accent(CONFIG_FILE)}`);
-  console.log(`${chalk.bold('Runtime:')} ${accent(scriptPath)}`);
-  console.log(`${chalk.bold('Startup:')} ${accent(startupTarget)}`);
+
+  console.log('');
+  console.log(title('Installation'));
+  console.log(`  ${pc.bold('Config').padEnd(10)} ${accent(compactHomePath(CONFIG_FILE))}`);
+  console.log(`  ${pc.bold('Runtime').padEnd(10)} ${accent(scriptPath)}`);
+  console.log(`  ${pc.bold('Startup').padEnd(10)} ${accent(startupTarget)}`);
+
+  const hookLines: string[] = [];
   if (codexHooks) {
-    console.log(`${chalk.bold('Codex hooks:')} ${success(`${codexHooks.installed} installed`)} in ${accent(codexHooks.hooksFile)}`);
-    console.log(warning('Open Codex and run `/hooks` once to review and trust the new hooks.'));
+    hookLines.push(`  ${success(`✔ ${codexHooks.installed} Codex hooks`)} → ${accent(codexHooks.hooksFile)}`);
+    hookLines.push(dim('    Open Codex and run `/hooks` once to review and trust the new hooks.'));
   } else if (detectedCodexForSetup(detections, toolProviders)) {
-    console.log(warning('Codex hooks skipped by --no-codex-hooks.'));
+    hookLines.push(warning('  ✖ Codex hooks skipped by --no-codex-hooks.'));
   } else {
-    console.log(dim('Codex hooks skipped because Codex was not detected.'));
+    hookLines.push(dim('  · Codex hooks skipped (Codex not detected).'));
   }
   if (claudeHooks) {
-    console.log(`${chalk.bold('Claude hooks:')} ${success(`${claudeHooks.installed} installed`)} in ${accent(claudeHooks.settingsFile)}`);
+    hookLines.push(`  ${success(`✔ ${claudeHooks.installed} Claude hooks`)} → ${accent(claudeHooks.settingsFile)}`);
   } else if (detectedClaudeForSetup(detections, toolProviders)) {
-    console.log(warning('Claude hooks skipped by --no-claude-hooks.'));
+    hookLines.push(warning('  ✖ Claude hooks skipped by --no-claude-hooks.'));
   } else {
-    console.log(dim('Claude hooks skipped because Claude Code was not detected.'));
+    hookLines.push(dim('  · Claude hooks skipped (Claude Code not detected).'));
   }
+  if (hookLines.length) {
+    console.log('');
+    console.log(title('Managed hooks'));
+    for (const line of hookLines) {
+      console.log(line);
+    }
+  }
+  printSessionIntegrations();
   if (!startNow) {
-    console.log(dim('Startup is installed; daemon will run at next login.'));
+    console.log(dim('Startup is installed; the daemon will run at next login.'));
   }
 
   return true;
@@ -4193,6 +4323,24 @@ function toolFromSession(session: HookSessionState): ActiveTool {
   };
 }
 
+function familyKeyForTool(tool: ActiveTool): string {
+  const family = toolFamilyForTool(tool);
+  return family === 'other' ? `other:${tool.key}` : family;
+}
+
+function familyKeyForSession(session: HookSessionState): string {
+  return familyKeyForTool(toolFromSession(session));
+}
+
+function countStateSessionsByFamily(sessions: HookSessionState[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const session of sessions) {
+    const key = familyKeyForSession(session);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
 function detectStateTools(): ActiveTool[] {
   const state = cleanupStateSessions(readStateFile(), Date.now());
   const sessions = Object.values(state.sessions);
@@ -4222,17 +4370,17 @@ function detectStateTools(): ActiveTool[] {
 
   const tools: ActiveTool[] = [];
   const seenFamilies = new Set<string>();
+  const sessionCounts = countStateSessionsByFamily(sessions);
 
   for (const session of sessions) {
     const tool = toolFromSession(session);
-    const family = toolFamilyForTool(tool);
-    const key = family === 'other' ? `other:${tool.key}` : family;
+    const key = familyKeyForTool(tool);
 
     if (seenFamilies.has(key)) {
       continue;
     }
 
-    tools.push(tool);
+    tools.push({ ...tool, sessionCount: sessionCounts.get(key) || null });
     seenFamilies.add(key);
   }
 
@@ -4248,8 +4396,7 @@ function mergeActiveTools(primary: ActiveTool[], fallback: ActiveTool[]): Active
   const seen = new Set<string>();
 
   for (const tool of [...primary, ...fallback]) {
-    const family = toolFamilyForTool(tool);
-    const key = family === 'other' ? `other:${tool.key}` : family;
+    const key = familyKeyForTool(tool);
 
     if (seen.has(key)) {
       continue;
@@ -4491,6 +4638,15 @@ function modelTextForPresence(tool: ActiveTool): string | null {
   return truncatePresenceText(effort ? `${model} · ${effort}` : model);
 }
 
+function sessionStatusEmoji(tool: ActiveTool): string {
+  return emojiForStatus(tool.status) || '';
+}
+
+function activityEmojiText(tool: ActiveTool, activityText: string): string {
+  const emoji = sessionStatusEmoji(tool);
+  return emoji ? `${emoji} ${activityText}`.trim() : activityText;
+}
+
 async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveTool | null> {
   if (!tool) {
     return null;
@@ -4500,8 +4656,12 @@ async function enrichToolForPresence(tool: ActiveTool | null): Promise<ActiveToo
   const activityText = activityTextForPresence(tool);
   const modelText = modelTextForPresence(tool);
   const contextText = formatContextText(tool.contextText);
+  const sessionMarker = tool.sessionCount && tool.sessionCount > 1
+    ? `👥 ${tool.sessionCount}`
+    : null;
   const details = joinPresenceParts([
-    SHOW_ACTIVITY ? activityText : null,
+    sessionMarker,
+    SHOW_ACTIVITY ? activityEmojiText(tool, activityText) : null,
     SHOW_PROJECT ? projectBranchText(metadata) : null
   ]);
   const quotaFallback = toolFamilyForTool(tool) === 'codex'
@@ -4818,6 +4978,8 @@ async function main(): Promise<void> {
     license: APP_LICENSE,
     codexClientId: CODEX_CLIENT_ID,
     claudeClientId: CLAUDE_CLIENT_ID,
+    opencodeClientId: OPENCODE_CLIENT_ID,
+    piClientId: PI_CLIENT_ID,
     configFile: CONFIG_FILE,
     stateFile: STATE_FILE
   })) {
