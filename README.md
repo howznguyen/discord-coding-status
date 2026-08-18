@@ -5,7 +5,7 @@
 <h1 align="center">Discord Coding Status</h1>
 
 <p align="center">
-  Real-time Discord Rich Presence for Codex and Claude Code.
+  Real-time Discord Rich Presence for Codex, Claude Code, OpenCode, and Pi.
 </p>
 
 <p align="center">
@@ -32,8 +32,8 @@ Discord Coding Status is a small local daemon that keeps your Discord activity i
 
 ## Why use it?
 
-- **Real-time updates** - Codex and Claude Code hook changes reach Discord immediately; polling remains as a fallback.
-- **Codex and Claude Code** - separate Discord application identities are built in for both tools.
+- **Real-time updates** - Codex, Claude Code, OpenCode, and Pi hook and process changes reach Discord immediately; polling remains as a fallback.
+- **Codex, Claude Code, OpenCode, and Pi** - separate Discord application identities are built in for each tool.
 - **Useful context** - show activity, sanitized repository name, branch, package, and quota according to your privacy level.
 - **Quota aware** - read Codex quota from OAuth/app-server RPC and Claude subscription quota from Claude Code OAuth.
 - **Local-first** - session state stays on your machine and Rich Presence uses Discord's local IPC/RPC transport.
@@ -63,14 +63,16 @@ The state file is watched for immediate changes. A 10-second process/polling loo
 | Codex in ChatGPT desktop | Process detection | OAuth or app-server RPC | Codex |
 | Claude Code | Lifecycle hooks + process fallback | Subscription OAuth | Claude Code |
 | Claude Desktop | Process detection | — | Claude Code |
+| OpenCode CLI | Process detection | — | OpenCode |
+| Pi | Process detection | — | Pi |
 
-If Codex and Claude are active together, the daemon updates both RPC clients. Discord Desktop decides which activities are visible in its interface. Claude Desktop detection is independent from Claude Code hooks and subscription quota.
+If multiple tools are active together, the daemon updates each tool's own RPC client. Discord Desktop decides which activities are visible in its interface.
 
 ## Requirements
 
 - Node.js 18 or newer
 - Discord Desktop, signed in and running
-- Codex CLI, ChatGPT desktop with Codex, Claude Code, or Claude Desktop
+- Codex CLI, ChatGPT desktop with Codex, Claude Code, Claude Desktop, OpenCode, or Pi
 - macOS or Windows for automatic startup installation
 
 Linux can run the daemon manually, but `setup` and `uninstall` currently manage startup only on macOS and Windows.
@@ -91,7 +93,7 @@ npx -y discord-coding-status@latest setup
 
 Setup performs four actions:
 
-1. Detects local Codex/ChatGPT and Claude CLI or desktop installations.
+1. Detects local Codex/ChatGPT, Claude, OpenCode, and Pi CLI or desktop installations.
 2. Copies a self-contained runtime into your user application-data directory.
 3. Installs and starts a macOS LaunchAgent or Windows Scheduled Task.
 4. Installs managed Codex hooks when Codex is detected and Claude hooks when Claude Code is detected.
@@ -130,7 +132,7 @@ npx discord-coding-status quota --source oauth
 npx discord-coding-status quota --tool claude
 ```
 
-Start a Codex or Claude Code session, then submit a prompt or use a tool. Discord should update within moments.
+Start a Codex, Claude Code, OpenCode, or Pi session, then submit a prompt or use a tool. OpenCode and Pi are detected through their running process; Discord updates within the polling interval (10 seconds by default). Codex and Claude Code also update immediately through managed lifecycle hooks.
 
 ### Updating
 
@@ -257,8 +259,12 @@ Example:
 | `limitsText` | - | Override the displayed quota text. |
 | `codexClientId` | built in | Override the Discord application ID used for Codex. |
 | `claudeClientId` | built in | Override the Discord application ID used for Claude Code. |
+| `opencodeClientId` | built in | Override the Discord application ID used for OpenCode. |
+| `piClientId` | built in | Override the Discord application ID used for Pi. |
 | `codexImageKey` | - | Use an uploaded asset key from the Codex Discord application. |
 | `claudeImageKey` | - | Use an uploaded asset key from the Claude Discord application. |
+| `opencodeImageKey` | - | Use an uploaded asset key from the OpenCode Discord application. |
+| `piImageKey` | - | Use an uploaded asset key from the Pi Discord application. |
 | `preferCodexCli` | `false` | Prefer CLI process detection when Codex App and CLI are both active. |
 
 See [`.env.example`](./.env.example) for advanced environment overrides used during local development.
@@ -269,8 +275,10 @@ The built-in application IDs are:
 
 - Codex: `1517375602662051900`
 - Claude Code: `1521213655092428923`
+- OpenCode: `1538957549364322404`
+- Pi: `1538957711503396986`
 
-Tool-specific IDs let Codex and Claude Code use separate Discord identities. Custom image keys work only when the matching asset already exists in that Discord application.
+Tool-specific IDs let each tool use a separate Discord identity. Custom image keys work only when the matching asset already exists in that Discord application.
 
 ## Codex quota
 
@@ -356,6 +364,8 @@ npx discord-coding-status hook \
   --cwd "$PWD" \
   --activity "Working with Claude Code"
 ```
+
+Optional fields include `--model`, `--effort`, and `--context`. The activity line is decorated with a status emoji (for example 🧠 while thinking, ⚡ while running, ✋ when waiting for input) and, when several sessions of the same tool are active at once, prefixed with an emoji count marker (`👥 2 | …` means two sessions are running). The bundled Pi extension (`pi` session reporting) sends model, thinking level, and tool activity automatically; without it, process detection still shows Pi, OpenCode, and other provider families with project context only.
 
 Inspect or clear local sessions:
 
