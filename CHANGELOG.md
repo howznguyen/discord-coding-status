@@ -25,6 +25,8 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+- Added managed Grok Code lifecycle hooks: setup installs passive hooks in `~/.grok/hooks/` that report sessions (status, tool activity, project) to the daemon without ever blocking the agent.
+
 ## [1.4.1] - 2026-08-18
 
 - Fixed Windows `setup` failing with "Access is denied." when creating the logon scheduled task: stderr is now surfaced and task creation retries elevated through UAC (or prompts the user to run setup from an Administrator terminal).
