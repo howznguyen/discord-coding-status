@@ -28,6 +28,7 @@ import {
   formatCodexMultiplierText,
   formatCodexPlanText,
   formatRichStateText,
+  joinMetricParts,
   parseRichStateCommandOutput,
   richStateFromCodexSnapshot,
   truncatePresenceText
@@ -840,6 +841,130 @@ async function getNativeClaudeQuotaText(tool?: ActiveTool): Promise<string | nul
 
 let usageRefreshKick: () => void = () => {};
 
+export function resolveOpencodeApiKey(): string | null {
+  const direct = (
+    process.env.OPENCODE_API_KEY
+    || process.env.DISCORD_CODING_STATUS_OPENCODE_API_KEY
+    || ''
+  ).trim();
+  if (direct) {
+    return direct;
+  }
+
+  for (const file of [
+    path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
+    path.join(os.homedir(), '.config', 'opencode', 'auth.json')
+  ]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+      const key = findOpencodeApiKeyDeep(parsed);
+      if (key) {
+        return key;
+      }
+    } catch (_) {
+      // Auth may live in opencode's SQLite store; the env override still works.
+    }
+  }
+
+  return null;
+}
+
+function findOpencodeApiKeyDeep(value: unknown, depth = 0): string | null {
+  if (depth > 4 || !value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const mentionsOpencode = JSON.stringify(record).toLowerCase().includes('opencode');
+  if (mentionsOpencode) {
+    for (const key of ['key', 'apiKey', 'api_key', 'token', 'credentials', 'value']) {
+      const candidate = record[key];
+      if (typeof candidate === 'string' && /^sk-?[A-Za-z0-9]/.test(candidate.trim())) {
+        return candidate.trim();
+      }
+    }
+  }
+
+  for (const child of Object.values(record)) {
+    const found = findOpencodeApiKeyDeep(child, depth + 1);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function opencodeWindowPercent(window: unknown): number | null {
+  const record = asRecord(window);
+  if (!record) {
+    return null;
+  }
+  const value = record.used_percent ?? record.usedPercent ?? record.percent ?? record.usage_percent;
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function formatOpencodeGoUsage(payload: unknown): string | null {
+  const root = asRecord(payload);
+  const usage = asRecord(root?.usage);
+  if (!usage) {
+    return null;
+  }
+
+  const windows: string[] = [];
+  for (const [key, label] of [['rolling', '5h'], ['weekly', 'weekly'], ['monthly', 'month']] as const) {
+    const used = opencodeWindowPercent(usage[key]);
+    if (used === null) {
+      continue;
+    }
+    const remaining = Math.max(0, Math.min(100, 100 - used));
+    windows.push(`${label} ${Math.round(remaining)}%`);
+  }
+
+  return windows.length
+    ? formatRichStateText({ planText: 'OpenCode Go', limitsText: joinMetricParts(windows) })
+    : null;
+}
+
+export async function getNativeOpencodeQuotaText(tool?: ActiveTool): Promise<string | null> {
+  if (toolFamilyForTool(tool) !== 'opencode') {
+    return null;
+  }
+
+  const source = (process.env.DISCORD_CODING_STATUS_OPENCODE_QUOTA_SOURCE || 'auto').trim().toLowerCase();
+  if (source === 'off') {
+    return null;
+  }
+
+  const apiKey = resolveOpencodeApiKey();
+  if (!apiKey) {
+    return null;
+  }
+
+  const base = (
+    process.env.DISCORD_CODING_STATUS_OPENCODE_API_BASE_URL
+    || 'https://opencode.ai/zen/go/v1'
+  ).trim().replace(/\/+$/, '');
+
+  try {
+    const payload = await fetchCodexJson(`${base}/usage`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json'
+      }
+    });
+    return formatOpencodeGoUsage(payload);
+  } catch (error) {
+    logError('OpenCode Go quota fetch failed', error);
+    return null;
+  }
+}
+
 export function registerUsageRefreshKick(kick: () => void): void {
   usageRefreshKick = kick;
 }
@@ -910,6 +1035,8 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
     }
   } else if (toolFamily === 'claude') {
     text = await getNativeClaudeQuotaText(tool);
+  } else if (toolFamily === 'opencode') {
+    text = await getNativeOpencodeQuotaText(tool);
   }
 
   if (!text && toolFamily !== 'claude' && PLAN_TEXT_OVERRIDE) {

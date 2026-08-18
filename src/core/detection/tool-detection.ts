@@ -159,3 +159,11 @@ export function isPiProcess(value: ProcessDescriptor | string): boolean {
     || executable === 'pi.exe'
     || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*pi-coding-agent(?:[/.][^\s]*)?(?:\s|$)/.test(text);
 }
+
+export function isGrokProcess(value: ProcessDescriptor | string): boolean {
+  const text = normalizedProcessText(value).replace(/\\/g, '/');
+  const executable = executableBasename(value);
+  return executable === 'grok'
+    || executable === 'grok.exe'
+    || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?grok(?:[/.][^\s]*)?(?:\s|$)/.test(text);
+}

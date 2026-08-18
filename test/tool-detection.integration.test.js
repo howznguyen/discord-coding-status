@@ -10,6 +10,7 @@ const {
   isCodexDesktopProcess,
   isOpencodeProcess,
   isPiProcess,
+  isGrokProcess,
   parseWindowsStartApps,
   windowsDesktopAppDetail
 } = require('../dist/core/detection/tool-detection');
@@ -142,5 +143,28 @@ test('Pi CLI processes are detected without capturing unrelated `pi` tokens', ()
     'claude'
   ]) {
     assert.equal(isPiProcess(unrelated), false);
+  }
+});
+
+test('Grok Code processes are detected without capturing unrelated text', () => {
+  const binary = '/opt/homebrew/bin/grok';
+  const windowsBinary = 'C:\\Tools\\grok.exe';
+  const tui = {
+    line: '/usr/local/bin/grok --model grok-build',
+    executablePath: '/usr/local/bin/grok',
+    commandLine: 'grok --model grok-build'
+  };
+
+  for (const process of [binary, windowsBinary, tui]) {
+    assert.equal(isGrokProcess(process), true);
+  }
+
+  for (const unrelated of [
+    'node /usr/local/bin/grok-helper.js',
+    'grokking the codebase',
+    'codex',
+    'pi'
+  ]) {
+    assert.equal(isGrokProcess(unrelated), false);
   }
 });
