@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 This project follows semantic versioning once tagged releases begin.
 
+## [1.4.0] - 2026-08-18
+
+- Added companion Pi extension and OpenCode plugin that report live Pi and OpenCode sessions (model, activity, and reasoning) through the generic `hook` command.
+- Added status emoji to the activity line and a per-session count marker (`👥 N`) when several sessions of one tool are active at once.
+- Added a session-integrations status block to `setup` output and replaced the `chalk` dependency with the lighter `picocolors`.
+- Decomposed the ~5000-line CLI entrypoint into focused modules (`env`, `presence-text`, `state-store`, `quota`, `presence`, `daemon`) with no behavior change.
+- Added built-in OpenCode and Pi providers with process detection, setup discovery, and separate Discord application identities (`1538957549364322404` for OpenCode, `1538957711503396986` for Pi), including config aliases and editor fields.
+- Added ChatGPT desktop (Codex) and Claude Desktop install/process detection on macOS and Windows, while keeping embedded app servers and the Claude Code URL handler separate from CLI detection.
+- Split command policy, platform adapters, core detection, and colocated domain contracts out of the CLI entrypoint; standardized source dependencies on TypeScript imports and added automated architecture-boundary coverage.
+- Cleaned `dist` before each build so moved modules cannot remain as stale files in published npm packages.
+- Added a capability-driven tool provider registry for process/setup/hook/Discord integration, with built-in Codex and Claude providers plus a tested fake OpenCode extension contract.
+- Added an approval-gated release-candidate workflow that builds a draft artifact before publishing npm and the GitHub Release together.
+- Fixed setup probes so mocked and real platform paths use the target platform's path semantics on every CI host.
+
 ## [Unreleased]
 
 - Added built-in OpenCode and Pi providers with process detection, setup discovery, and separate Discord application identities (`1538957549364322404` for OpenCode, `1538957711503396986` for Pi), including config aliases and editor fields.
