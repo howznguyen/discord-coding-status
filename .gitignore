@@ -16,3 +16,7 @@ coverage/
 
 # Knowns runtime state is local (search index, logs, task timers, and memories).
 .knowns/
+
+# Tool runtime/state (local) kept out of the repo
+.omo/
+.pi/live-sessions/
