@@ -20,6 +20,7 @@ This project follows semantic versioning once tagged releases begin.
 
 ## [Unreleased]
 
+- Fixed Windows `setup` running the daemon in a visible console window: the scheduled task now launches through a hidden VBScript wrapper.
 - Fixed Windows `setup` failing with "Access is denied." when creating the logon scheduled task: stderr is now surfaced and task creation retries elevated through UAC (or prompts the user to run setup from an Administrator terminal).
 
 - Added built-in OpenCode and Pi providers with process detection, setup discovery, and separate Discord application identities (`1538957549364322404` for OpenCode, `1538957711503396986` for Pi), including config aliases and editor fields.

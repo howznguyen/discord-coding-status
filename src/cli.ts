@@ -1191,7 +1191,23 @@ function writeWindowsLauncher(scriptPath: string): string {
   return launcherPath;
 }
 
-function windowsScheduledTaskArgs(launcherPath: string): string[] {
+function windowsQuotedArg(value: string): string {
+  return value.includes(' ') || value.includes('"')
+    ? `"${value.replace(/"/g, '""')}"`
+    : value;
+}
+
+function writeWindowsHiddenLauncher(launcherPath: string): string {
+  const vbsPath = path.join(getInstallDirectory(), `${APP_ID}.vbs`);
+  const escaped = launcherPath.replace(/"/g, '""');
+  fs.writeFileSync(vbsPath, [
+    'Set shell = CreateObject("WScript.Shell")',
+    `shell.Run "${escaped}", 0, False`
+  ].join('\r\n') + '\r\n');
+  return vbsPath;
+}
+
+function windowsScheduledTaskArgs(trValue: string): string[] {
   return [
     '/Create',
     '/TN',
@@ -1199,7 +1215,7 @@ function windowsScheduledTaskArgs(launcherPath: string): string[] {
     '/SC',
     'ONLOGON',
     '/TR',
-    `"${launcherPath}"`,
+    trValue,
     '/F'
   ];
 }
@@ -1215,7 +1231,8 @@ function execFileStderr(error: unknown): string {
 
 function installWindowsScheduledTask(scriptPath: string, startNow: boolean): string {
   const launcherPath = writeWindowsLauncher(scriptPath);
-  const args = windowsScheduledTaskArgs(launcherPath);
+  const hiddenPath = writeWindowsHiddenLauncher(launcherPath);
+  const args = windowsScheduledTaskArgs(`wscript.exe ${windowsQuotedArg(hiddenPath)}`);
 
   try {
     execFileSync('schtasks', args, { stdio: ['ignore', 'ignore', 'pipe'] });
