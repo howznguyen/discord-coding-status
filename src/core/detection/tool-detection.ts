@@ -139,9 +139,19 @@ export function isCodexCliProcess(value: ProcessDescriptor | string): boolean {
 
   const text = normalizedProcessText(value).replace(/\\/g, '/');
   const executable = executableBasename(value);
-  return executable === 'codex'
-    || executable === 'codex.exe'
-    || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?codex(?:[/.][^\s]*)?(?:\s|$)/.test(text);
+
+  if (executable === 'codex' || executable === 'codex.exe') {
+    // The standalone Codex desktop app starts `codex app-server` headless at
+    // login. That background service is not an interactive CLI session and
+    // must not light up as active presence while the user is doing nothing.
+    if (/(?:^|[\s/])app[-_]server(?:\s|$)/.test(text)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  return /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?codex(?:[/.][^\s]*)?(?:\s|$)/.test(text);
 }
 
 export function isOpencodeProcess(value: ProcessDescriptor | string): boolean {

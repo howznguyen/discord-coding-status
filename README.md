@@ -67,7 +67,7 @@ The state file is watched for immediate changes. A 10-second process/polling loo
 | Pi | Process detection | — | Pi |
 | Grok Code | Process detection | — | Grok Code |
 
-If multiple tools are active together, the daemon updates each tool's own RPC client. Discord Desktop decides which activities are visible in its interface.
+If multiple tools are active together, the daemon submits presence only for the tool whose session was updated most recently and clears the others. Discord Desktop can display a single activity per user, so this keeps the harness you are actually using in view instead of a stale background process.
 
 ## Requirements
 

@@ -15,6 +15,8 @@ export interface ProcessInfo {
   raw: string;
   executablePath?: string | null;
   commandLine?: string | null;
+  /** Cumulative CPU time of the process in milliseconds (when available). */
+  cpuMs?: number;
 }
 
 export interface ActiveTool extends ToolDefinition {

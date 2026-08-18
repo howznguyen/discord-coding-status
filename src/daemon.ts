@@ -18,7 +18,9 @@ import {
   FALLBACK_CLIENT_ID,
   POLL_INTERVAL_MS,
   PREFER_CODEX_CLI,
+  PROCESS_ACTIVE_CPU_MS,
   PROCESS_DETECTION_ENABLED,
+  PROCESS_IDLE_GRACE_MS,
   STATE_FILE,
   STATE_WATCH_DEBOUNCE_MS,
   danger,
@@ -104,7 +106,9 @@ async function runLoopOnce(): Promise<void> {
         const stateTools = detectStateTools();
         const processTools = PROCESS_DETECTION_ENABLED
           ? detectActiveTools(await getProcessList(), toolProviders, {
-            preferredSurfaceByFamily: PREFER_CODEX_CLI ? { codex: 'cli' } : {}
+            preferredSurfaceByFamily: PREFER_CODEX_CLI ? { codex: 'cli' } : {},
+            idleGraceMs: PROCESS_IDLE_GRACE_MS,
+            activeCpuMs: PROCESS_ACTIVE_CPU_MS
           })
           : [];
         debugLog(`Loop found ${stateTools.length} state tool(s) and ${processTools.length} process tool(s).`);

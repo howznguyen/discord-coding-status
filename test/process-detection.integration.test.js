@@ -66,3 +66,66 @@ test('Claude Code URL handler is ignored as an active tool', () => {
 
   assert.deepEqual(detectActiveTools([urlHandler], toolProviders), []);
 });
+
+test('processes that stopped consuming CPU stop being reported as active sessions', async () => {
+  const idlePi = {
+    pid: 91001,
+    line: '/opt/homebrew/bin/pi',
+    raw: '/opt/homebrew/bin/pi pi',
+    executablePath: '/opt/homebrew/bin/pi',
+    commandLine: 'pi',
+    cpuMs: 1200
+  };
+  const options = { idleGraceMs: 0 };
+
+  // First observation: a live process with CPU data counts as a session.
+  assert.deepEqual(detectActiveTools([idlePi], toolProviders, options).map((tool) => tool.key), ['piCli']);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  // Second observation with no CPU growth: the process is alive but idle, so
+  // it must not keep reporting as an active Pi session.
+  assert.deepEqual(detectActiveTools([idlePi], toolProviders, options), []);
+});
+
+test('processes that keep consuming CPU remain active across polls', () => {
+  const busyPi = {
+    pid: 91002,
+    line: '/opt/homebrew/bin/pi',
+    raw: '/opt/homebrew/bin/pi pi',
+    executablePath: '/opt/homebrew/bin/pi',
+    commandLine: 'pi',
+    cpuMs: 500
+  };
+  const options = { idleGraceMs: 0 };
+
+  assert.deepEqual(detectActiveTools([busyPi], toolProviders, options).map((tool) => tool.key), ['piCli']);
+  busyPi.cpuMs = 900; // consumed 400ms since the previous poll
+  assert.deepEqual(detectActiveTools([busyPi], toolProviders, options).map((tool) => tool.key), ['piCli']);
+});
+
+test('multiple alive processes drop stale ones and keep the active session', async () => {
+  const staleKnownsSession = {
+    pid: 91003,
+    line: '/opt/homebrew/bin/pi',
+    raw: '/opt/homebrew/bin/pi pi',
+    executablePath: '/opt/homebrew/bin/pi',
+    commandLine: 'pi',
+    cpuMs: 2000
+  };
+  const activeSession = {
+    pid: 91004,
+    line: '/opt/homebrew/bin/pi',
+    raw: '/opt/homebrew/bin/pi pi',
+    executablePath: '/opt/homebrew/bin/pi',
+    commandLine: 'pi',
+    cpuMs: 300
+  };
+  const options = { idleGraceMs: 0 };
+
+  assert.deepEqual(detectActiveTools([staleKnownsSession, activeSession], toolProviders, options)
+    .map((tool) => tool.key), ['piCli']);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  activeSession.cpuMs = 700; // the active session is still doing work
+  const [tool] = detectActiveTools([staleKnownsSession, activeSession], toolProviders, options);
+  // The stale Knowns session stopped consuming CPU; the active one survives.
+  assert.equal(tool.processInfo.pid, 91004);
+});

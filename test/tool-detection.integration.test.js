@@ -34,7 +34,7 @@ test('Windows Start Apps identify official desktop surface names without fixed i
   assert.deepEqual(parseWindowsStartApps('{invalid'), []);
 });
 
-test('Codex desktop processes are not misclassified as Codex CLI', () => {
+test('Codex desktop processes and headless app-servers are not misclassified as Codex CLI', () => {
   const macHost = '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT';
   const macAppServer = '/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server';
   const windowsHost = {
@@ -46,18 +46,31 @@ test('Codex desktop processes are not misclassified as Codex CLI', () => {
     executablePath: 'C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_1.0_x64\\resources\\codex.exe',
     commandLine: 'codex.exe app-server'
   };
-  const cli = {
-    line: '/opt/homebrew/bin/codex app-server',
-    executablePath: '/opt/homebrew/bin/codex',
+  // The standalone Codex desktop cask runs `codex app-server` headless at
+  // login; it is a background service, not an interactive CLI session.
+  const standaloneDesktopServer = {
+    line: '/opt/homebrew/Caskroom/codex/0.147.0/bin/codex app-server',
+    executablePath: '/opt/homebrew/Caskroom/codex/0.147.0/bin/codex',
     commandLine: 'codex app-server'
   };
+  const cli = {
+    line: '/opt/homebrew/bin/codex',
+    executablePath: '/opt/homebrew/bin/codex',
+    commandLine: 'codex'
+  };
+  const cliExec = '/opt/homebrew/bin/codex exec "fix the flaky test"';
 
   for (const process of [macHost, macAppServer, windowsHost, windowsAppServer]) {
     assert.equal(isCodexDesktopProcess(process), true);
     assert.equal(isCodexCliProcess(process), false);
   }
+  // The standalone desktop cask's headless server is neither a recognized
+  // desktop process nor an active interactive CLI session.
+  assert.equal(isCodexDesktopProcess(standaloneDesktopServer), false);
+  assert.equal(isCodexCliProcess(standaloneDesktopServer), false);
   assert.equal(isCodexDesktopProcess(cli), false);
   assert.equal(isCodexCliProcess(cli), true);
+  assert.equal(isCodexCliProcess(cliExec), true);
 });
 
 test('Claude Desktop, Claude Code, and the URL handler remain separate', () => {

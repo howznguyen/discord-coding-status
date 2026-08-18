@@ -238,6 +238,88 @@ test('normal activity style replaces humorous Codex hook messages', async (t) =>
   assert.equal(state.sessions['normal-activity-session'].activity, 'Using Bash');
 });
 
+test('only the most recently updated session is submitted; older tools are cleared', async (t) => {
+  const { env, rpcLogFile, stateFile } = createTestEnvironment(t);
+  const daemon = startDaemon(t, env);
+
+  await waitFor(
+    () => daemon.output().stdout.includes('for hook updates'),
+    'the daemon state watcher to start'
+  );
+
+  const older = Date.now() - 60_000;
+  const newer = Date.now();
+  const writeState = (sessions) => {
+    fs.writeFileSync(stateFile, JSON.stringify({ version: 1, sessions }));
+  };
+
+  writeState({
+    'codex-old': {
+      tool: 'codex',
+      surface: 'cli',
+      status: 'running',
+      session_id: 'codex-old',
+      cwd: process.cwd(),
+      updated_at: older,
+      started_at: older,
+      activity: 'Older codex session'
+    }
+  });
+
+  const codexActivity = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.clientId === '1517375602662051900'
+        && event.activity.details.includes('Older codex session')
+    ),
+    'the first codex session to reach Discord RPC'
+  );
+  assert.ok(codexActivity);
+
+  writeState({
+    'codex-old': {
+      tool: 'codex',
+      surface: 'cli',
+      status: 'running',
+      session_id: 'codex-old',
+      cwd: process.cwd(),
+      updated_at: older,
+      started_at: older,
+      activity: 'Older codex session'
+    },
+    'opencode-new': {
+      tool: 'opencode',
+      surface: 'cli',
+      status: 'running',
+      session_id: 'opencode-new',
+      cwd: process.cwd(),
+      updated_at: newer,
+      started_at: newer,
+      activity: 'Newer opencode session'
+    }
+  });
+
+  const opencodeActivity = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'setActivity'
+        && event.clientId === '1538957549364322404'
+        && event.activity.details.includes('Newer opencode session')
+    ),
+    'the newest opencode session to reach Discord RPC'
+  );
+  assert.ok(opencodeActivity);
+
+  const codexClear = await waitFor(
+    () => readRpcEvents(rpcLogFile).find(
+      (event) => event.method === 'clearActivity'
+        && event.clientId === '1517375602662051900'
+    ),
+    'the older codex session to clear Discord RPC'
+  );
+  assert.ok(codexClear);
+  assert.equal(daemon.output().stderr, '');
+});
+
 test('context display rejects free-form text instead of exposing it to Discord', async (t) => {
   const { env, rpcLogFile } = createTestEnvironment(t, {
     DISCORD_CODING_STATUS_SHOW_MODEL: 'false',

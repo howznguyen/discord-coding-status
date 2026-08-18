@@ -13,7 +13,7 @@ export async function getProcessList(): Promise<ProcessInfo[]> {
     return getWindowsProcessList();
   }
 
-  const { stdout } = await execFileAsync('ps', ['ax', '-o', 'pid=,comm=,args='], {
+  const { stdout } = await execFileAsync('ps', ['ax', '-o', 'pid=,time=,comm=,args='], {
     timeout: PS_TIMEOUT_MS,
     maxBuffer: 1024 * 1024
   }) as { stdout: string };
@@ -27,7 +27,7 @@ export async function getProcessList(): Promise<ProcessInfo[]> {
 async function getWindowsProcessList(): Promise<ProcessInfo[]> {
   const command = [
     '@(Get-CimInstance Win32_Process |',
-    'Select-Object ProcessId,ExecutablePath,CommandLine) |',
+    'Select-Object ProcessId,ExecutablePath,CommandLine,UserModeTime,KernelModeTime) |',
     'ConvertTo-Json -Compress'
   ].join(' ');
   const { stdout } = await execFileAsync('powershell.exe', [
@@ -64,12 +64,16 @@ async function getWindowsProcessList(): Promise<ProcessInfo[]> {
         return null;
       }
 
+      const userModeTicks = extractNumberLike(record?.UserModeTime) || 0;
+      const kernelModeTicks = extractNumberLike(record?.KernelModeTime) || 0;
+
       return {
         pid,
         line,
         raw: line,
         executablePath,
-        commandLine
+        commandLine,
+        cpuMs: (userModeTicks + kernelModeTicks) / 10_000
       };
     })
     .filter((processInfo): processInfo is ProcessInfo => Boolean(processInfo));
@@ -92,17 +96,56 @@ function extractNumberLike(value: unknown): number | null {
 
 function parseProcessLine(line: string): ProcessInfo | null {
   const trimmed = line.trim();
-  const match = trimmed.match(/^(\d+)\s+(.+)$/);
+  const match = trimmed.match(/^(\d+)\s+(\S+)\s+(.+)$/);
 
   if (!match) {
     return null;
   }
 
+  const pid = Number(match[1]);
+  const cpuSeconds = parseCpuSeconds(match[2]);
+
   return {
-    pid: Number(match[1]),
-    line: match[2],
-    raw: trimmed
+    pid,
+    line: match[3],
+    raw: trimmed,
+    cpuMs: cpuSeconds === null ? undefined : cpuSeconds * 1000
   };
+}
+
+function parseCpuSeconds(text: string): number | null {
+  const value = String(text || '').trim();
+  if (!value) {
+    return null;
+  }
+
+  // ps prints cumulative CPU time as MM:SS.cc, HH:MM:SS[.cc], or D-HH:MM:SS[.cc]
+  // when the process has accumulated a day or more of CPU time.
+  let normalized = value;
+  const dayMatch = normalized.match(/^(\d+)-(.+)$/);
+  if (dayMatch) {
+    normalized = `${Number(dayMatch[1]) * 24}:${dayMatch[2]}`;
+  }
+
+  const segments = normalized.split(':').map((segment) => {
+    const [whole, fraction] = segment.split('.');
+    const integer = Number(whole);
+    const frac = fraction ? Number(`0.${fraction}`) : 0;
+    return Number.isFinite(integer) ? integer + frac : NaN;
+  });
+
+  if (segments.some((segment) => Number.isNaN(segment)) || segments.length === 0) {
+    return null;
+  }
+
+  let seconds = segments.pop() as number;
+  let multiplier = 1;
+  while (segments.length) {
+    multiplier *= 60;
+    seconds += (segments.pop() as number) * multiplier;
+  }
+
+  return seconds;
 }
 
 export async function getCwdForProcess(processInfo: ProcessInfo | undefined): Promise<string | null> {

@@ -695,26 +695,30 @@ async function updateActivityForClient(clientId: string, tool: ActiveTool): Prom
   log(`Updated ${labelForClientId(clientId)} activity: ${tool.details} / ${tool.state}.`);
 }
 
-export async function updateActivities(tools: ActiveTool[]): Promise<void> {
-  const activeByClientId = new Map<string, ActiveTool>();
-
-  for (const tool of tools) {
-    const clientId = clientIdForTool(tool);
-    if (!clientId || activeByClientId.has(clientId)) {
-      continue;
-    }
-
-    activeByClientId.set(clientId, tool);
+export function selectNewestTool(tools: ActiveTool[]): ActiveTool | null {
+  if (!tools.length) {
+    return null;
   }
 
+  return [...tools].sort((left, right) => {
+    const leftTime = coerceStateTimestamp(left.updatedAt) || 0;
+    const rightTime = coerceStateTimestamp(right.updatedAt) || 0;
+    return rightTime - leftTime;
+  })[0];
+}
+
+export async function updateActivities(tools: ActiveTool[]): Promise<void> {
+  const newest = selectNewestTool(tools);
+  const newestClientId = newest ? clientIdForTool(newest) : null;
+
   for (const [clientId, state] of rpcConnections) {
-    if (!activeByClientId.has(clientId)) {
+    if (clientId !== newestClientId) {
       await clearConnectionActivity(clientId, state);
     }
   }
 
-  for (const [clientId, tool] of activeByClientId) {
-    await updateActivityForClient(clientId, tool);
+  if (newest && newestClientId) {
+    await updateActivityForClient(newestClientId, newest);
   }
 }
 
