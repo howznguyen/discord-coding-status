@@ -157,6 +157,14 @@ export function isCodexCliProcess(value: ProcessDescriptor | string): boolean {
 export function isOpencodeProcess(value: ProcessDescriptor | string): boolean {
   const text = normalizedProcessText(value).replace(/\\/g, '/');
   const executable = executableBasename(value);
+
+  // `opencode serve` is a headless server and `opencode acp` a protocol server.
+  // Both stay resident for hours without anyone coding in them, so they must not
+  // light up as active presence while the user works in another tool.
+  if (/(?:^|[\s/])opencode(?:\.exe)?\s+(?:serve|acp)(?:\s|$)/.test(text)) {
+    return false;
+  }
+
   return executable === 'opencode'
     || executable === 'opencode.exe'
     || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?opencode(?:[/.][^\s]*)?(?:\s|$)/.test(text);

@@ -37,6 +37,26 @@ export function detectedGrokForSetup(
   return detectedHookCapabilityForSetup(detections, providers, 'grok');
 }
 
+/**
+ * Explicit flags win over detection: `--no-<capability>-hooks` disables,
+ * `--<capability>-hooks` forces, otherwise the harness must be installed.
+ */
+export function shouldInstallHooksFor(
+  capability: HookCapability,
+  args: Record<string, string | boolean>,
+  detections: SetupToolDetection[],
+  providers: readonly ToolProvider[]
+): boolean {
+  return shouldInstallHooks(
+    args,
+    detections,
+    providers,
+    capability,
+    `${capability}-hooks`,
+    `no-${capability}-hooks`
+  );
+}
+
 function shouldInstallHooks(
   args: Record<string, string | boolean>,
   detections: SetupToolDetection[],

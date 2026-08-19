@@ -29,6 +29,7 @@ export function renderMetaHelp(context: MetaCommandContext): string {
 ${pc.dim('Local Discord Rich Presence for Codex and Claude Code.')}
 
 ${pc.bold('Usage:')}
+  discord-coding-status                       Open the interactive menu (on a terminal)
   discord-coding-status setup                 Install startup and start the daemon
   discord-coding-status config                Open display TUI with live preview
   discord-coding-status config --advanced     Edit advanced config prompts
@@ -37,15 +38,10 @@ ${pc.bold('Usage:')}
   discord-coding-status daemon                Start the Discord Rich Presence daemon
   discord-coding-status uninstall             Remove startup entry
   discord-coding-status status                Print startup status
-  discord-coding-status setup-codex-hooks     Install Codex lifecycle hooks
-  discord-coding-status codex-hooks-status    Print Codex hook install status
-  discord-coding-status uninstall-codex-hooks Remove Codex lifecycle hooks
-  discord-coding-status setup-claude-hooks    Install Claude lifecycle hooks
-  discord-coding-status claude-hooks-status   Print Claude hook install status
-  discord-coding-status uninstall-claude-hooks Remove Claude lifecycle hooks
-  discord-coding-status setup-grok-hooks      Install Grok lifecycle hooks
-  discord-coding-status grok-hooks-status     Print Grok hook install status
-  discord-coding-status uninstall-grok-hooks  Remove Grok lifecycle hooks
+  discord-coding-status hooks setup           Install hooks for every detected harness
+  discord-coding-status hooks setup codex     Install hooks for named harnesses only
+  discord-coding-status hooks uninstall grok  Remove hooks for named harnesses
+  discord-coding-status hooks status          Print hook install status as JSON
   discord-coding-status hook --tool codex     Write or update a local session state
   discord-coding-status codex-hook --event stop
   discord-coding-status claude-hook --event Stop
@@ -84,9 +80,9 @@ ${pc.bold('Examples:')}
   ${commandText('npx -y discord-coding-status@latest setup')}
   ${commandText('npx -y discord-coding-status@latest config')}
   ${commandText('discord-coding-status config --preview')}
-  ${commandText('npx -y discord-coding-status@latest setup --codex-hooks')}
-  ${commandText('npx -y discord-coding-status@latest setup --claude-hooks')}
-  ${commandText('npx -y discord-coding-status@latest setup --grok-hooks')}
+  ${commandText('npx -y discord-coding-status@latest setup --no-grok-hooks')}
+  ${commandText('discord-coding-status hooks setup codex grok')}
+  ${commandText('discord-coding-status hooks status')}
   ${commandText('discord-coding-status status')}
   ${commandText('discord-coding-status daemon')}
   ${commandText('DISCORD_CODING_STATUS_DETAIL_LEVEL=project discord-coding-status state')}

@@ -225,6 +225,18 @@ export function shellQuoteArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+// Windows hosts run hook commands through `powershell.exe -NoProfile -Command`.
+// PowerShell reads a leading quoted token as a string expression, so a command
+// that starts with a quoted executable path fails to parse. Single quotes are
+// literal in PowerShell, which also keeps `$` and backticks in user paths intact.
+export function powershellQuoteArg(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+export function powershellCommandLine(args: readonly string[]): string {
+  return `& ${args.map(powershellQuoteArg).join(' ')}`;
+}
+
 export function extractNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }

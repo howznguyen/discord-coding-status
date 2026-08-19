@@ -4,23 +4,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import {
-  CLAUDE_LIFECYCLE_HOOK_EVENTS,
-  CLAUDE_MANAGED_HOOK_MARKER,
-  getManagedClaudeHookStatus,
-  installManagedClaudeHooks,
-  removeManagedClaudeHooks
-} from './claude-hooks';
-import {
-  GROK_HOOK_EVENTS,
-  GROK_HOOKS_DIR,
-  GROK_HOOKS_FILE,
-  getManagedGrokHookStatus,
-  grokHookSessionFromArgs,
-  installManagedGrokHooks,
-  removeManagedGrokHooks
-} from './grok-hooks';
+import { execFileSync, spawn } from 'node:child_process';
+import { grokHookSessionFromArgs } from './grok-hooks';
 import {
   ClaudeQuotaEngine,
   claudeCredentialGeneration,
@@ -31,6 +16,7 @@ import {
 import { renderStatusSummary, sessionToActivityItem } from './commands/status/summary';
 import { detectSetupTools } from './adapters/system/installed-tools';
 import { runMetaCommand } from './commands/meta/command';
+import { runMenuCommand } from './commands/menu/command';
 import { runConfigCommand } from './commands/config/command';
 import { runConfigTui, configPreviewLines } from './commands/config/tui';
 import { runAdvancedConfigEditor } from './commands/config/editor';
@@ -66,7 +52,13 @@ import {
 import type { DaemonRefreshResult } from './adapters/startup/types';
 import type { ConfigPreviewSamples } from './commands/config/types';
 import type { HookSessionState } from './core/hooks/types';
-import { parseArgs, getArgString } from './commands/args';
+import { parseArgs, parsePositionals, getArgString } from './commands/args';
+import type { SetupHookSummary } from './commands/setup/types';
+import {
+  detectedHookInstallers,
+  findHookInstaller,
+  hookInstallers
+} from './hook-installers';
 import {
   DEFAULT_CLAUDE_CLIENT_ID,
   DEFAULT_CODEX_CLIENT_ID,
@@ -96,10 +88,6 @@ import {
   STATE_FILE,
   CONFIG_EDITOR_FIELDS,
   CODEX_HOME,
-  CODEX_HOOKS_FILE,
-  CLAUDE_CONFIG_DIR,
-  CLAUDE_SETTINGS_FILE,
-  CODEX_HOOK_EVENTS,
   CODEX_CLIENT_ID,
   CLAUDE_CLIENT_ID,
   OPENCODE_CLIENT_ID,
@@ -117,8 +105,6 @@ import {
   accent,
   title,
   compactHomePath,
-  shellQuoteArg,
-  asRecord,
   getPackageRoot,
   logError
 } from './env';
@@ -703,16 +689,18 @@ async function printStartupStatus(args: Record<string, string | boolean> = {}): 
     pathOverrides: { codexHome: CODEX_HOME }
   }, toolProviders);
 
-  const claudeHooksStatus = getManagedClaudeHookStatus(readClaudeSettings(), CLAUDE_LIFECYCLE_HOOK_EVENTS);
-  const grokHooksStatus = getManagedGrokHookStatus();
-  const codexInstalled = fs.existsSync(CODEX_HOOKS_FILE);
+  const hookResults: Record<string, SetupHookSummary | null> = {};
+  for (const installer of hookInstallers) {
+    const status = installer.status();
+    hookResults[installer.capability] = status.managedCount > 0
+      ? { installed: status.managedCount, file: status.target }
+      : null;
+  }
 
   const tools = buildSetupToolRows({
     detections,
     providers: toolProviders,
-    claudeHooks: claudeHooksStatus.installed ? { installed: claudeHooksStatus.managedCount } : null,
-    codexHooks: codexInstalled ? { installed: 4 } : null,
-    grokHooks: grokHooksStatus.installed ? { installed: grokHooksStatus.managedCount } : null,
+    hookResults,
     opencodePluginInstalled: fs.existsSync(OPENCODE_PLUGIN_TARGET),
     piExtensionInstalled: fs.existsSync(PI_EXTENSION_TARGET),
     args: {}
@@ -756,228 +744,31 @@ async function printStartupStatus(args: Record<string, string | boolean> = {}): 
   }));
 }
 
-function codexHookCommand(scriptPath: string, event: string): string {
-  return [
-    shellQuoteArg(process.execPath),
-    shellQuoteArg(scriptPath),
-    'codex-hook',
-    '--event',
-    shellQuoteArg(event)
-  ].join(' ');
-}
-
-function readCodexHooks(): Record<string, unknown> {
-  if (!fs.existsSync(CODEX_HOOKS_FILE)) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(CODEX_HOOKS_FILE, 'utf8')) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
-  } catch (error) {
-    logError('Failed to read Codex hooks configuration', error);
-    return {};
-  }
-}
-
-function writeCodexHooks(hooks: Record<string, unknown>): void {
-  fs.mkdirSync(CODEX_HOME, { recursive: true });
-  fs.writeFileSync(CODEX_HOOKS_FILE, `${JSON.stringify(hooks, null, 2)}\n`);
-}
-
-function installCodexHooks(scriptPath: string): { hooksFile: string; installed: number; removed: number } {
-  const existing = readCodexHooks();
-  const hooks = asRecord(existing.hooks) || {};
-  let removed = 0;
-
-  for (const event of CODEX_HOOK_EVENTS) {
-    const list = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-    const filtered = list.filter((item) => {
-      const record = asRecord(item);
-      const commandText = typeof record?.command === 'string' ? record.command : '';
-      const matchesManagedHook = commandText.includes('codex-hook')
-        && (commandText.includes(APP_ID) || commandText.includes(APP_TITLE));
-
-      if (matchesManagedHook) {
-        removed += 1;
-      }
-      return !matchesManagedHook;
-    });
-
-    filtered.push({
-      command: codexHookCommand(scriptPath, event),
-      statusMessage: APP_TITLE
-    });
-    hooks[event] = filtered;
-  }
-
-  existing.hooks = hooks;
-  writeCodexHooks(existing);
-  return {
-    hooksFile: CODEX_HOOKS_FILE,
-    installed: CODEX_HOOK_EVENTS.length,
-    removed
-  };
-}
-
-function uninstallCodexHooks(): { hooksFile: string; removed: number } {
-  const existing = readCodexHooks();
-  const hooks = asRecord(existing.hooks) || {};
-  let removed = 0;
-
-  for (const event of CODEX_HOOK_EVENTS) {
-    const list = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-    const filtered = list.filter((item) => {
-      const record = asRecord(item);
-      const commandText = typeof record?.command === 'string' ? record.command : '';
-      const matchesManagedHook = commandText.includes('codex-hook')
-        && (commandText.includes(APP_ID) || commandText.includes(APP_TITLE));
-
-      if (matchesManagedHook) {
-        removed += 1;
-      }
-      return !matchesManagedHook;
-    });
-
-    if (filtered.length > 0) {
-      hooks[event] = filtered;
-    } else {
-      delete hooks[event];
-    }
-  }
-
-  if (Object.keys(hooks).length > 0) {
-    existing.hooks = hooks;
-  } else {
-    delete existing.hooks;
-  }
-
-  writeCodexHooks(existing);
-  return {
-    hooksFile: CODEX_HOOKS_FILE,
-    removed
-  };
-}
-
-function printCodexHooksStatus(): void {
-  const hooks = asRecord(readCodexHooks().hooks) || {};
-  const managedHooks: Record<string, string[]> = {};
-  let managedCount = 0;
-
-  for (const event of CODEX_HOOK_EVENTS) {
-    const list = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-    const matching = list
-      .map((item) => {
-        const record = asRecord(item);
-        const commandText = typeof record?.command === 'string' ? record.command : '';
-        const statusMessage = typeof record?.statusMessage === 'string' ? record.statusMessage : '';
-        return statusMessage === APP_TITLE || (commandText.includes('codex-hook') && commandText.includes(APP_ID))
-          ? commandText
-          : '';
-      })
-      .filter(Boolean);
-
-    if (matching.length > 0) {
-      managedHooks[event] = matching;
-      managedCount += matching.length;
-    }
-  }
-
-  console.log(JSON.stringify({
-    codexHome: CODEX_HOME,
-    hooksFile: CODEX_HOOKS_FILE,
-    hooksFileExists: fs.existsSync(CODEX_HOOKS_FILE),
-    installed: managedCount > 0,
-    managedCount,
-    expectedEvents: CODEX_HOOK_EVENTS,
-    managedHooks
-  }, null, 2));
-}
-
-function claudeHookCommand(scriptPath: string, event: string): string {
-  return [
-    shellQuoteArg(process.execPath),
-    shellQuoteArg(scriptPath),
-    'claude-hook',
-    '--event',
-    shellQuoteArg(event),
-    CLAUDE_MANAGED_HOOK_MARKER
-  ].join(' ');
-}
-
-function writeClaudeSettings(settings: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS_FILE), { recursive: true });
-
-  if (fs.existsSync(CLAUDE_SETTINGS_FILE)) {
-    fs.copyFileSync(CLAUDE_SETTINGS_FILE, `${CLAUDE_SETTINGS_FILE}.bak`);
-  }
-
-  const tempFile = `${CLAUDE_SETTINGS_FILE}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(tempFile, CLAUDE_SETTINGS_FILE);
-  } finally {
-    try {
-      fs.unlinkSync(tempFile);
-    } catch (_) {
-      // The successful rename already removed the temporary pathname.
-    }
-  }
-}
-
-function installClaudeHooks(scriptPath: string): { settingsFile: string; installed: number; removed: number } {
-  const result = installManagedClaudeHooks(readClaudeSettings(), {
-    events: CLAUDE_LIFECYCLE_HOOK_EVENTS,
-    commandForEvent: (eventName) => claudeHookCommand(scriptPath, eventName),
-    timeout: 5
-  });
-  writeClaudeSettings(result.settings);
-  return {
-    settingsFile: CLAUDE_SETTINGS_FILE,
-    installed: result.installed,
-    removed: result.removed
-  };
-}
-
-function uninstallClaudeHooks(): { settingsFile: string; removed: number } {
-  const result = removeManagedClaudeHooks(readClaudeSettings());
-  if (result.removed > 0) {
-    writeClaudeSettings(result.settings);
-  }
-
-  return {
-    settingsFile: CLAUDE_SETTINGS_FILE,
-    removed: result.removed
-  };
-}
-
-function printClaudeHooksStatus(): void {
-  const settings = readClaudeSettings();
-  const status = getManagedClaudeHookStatus(settings, CLAUDE_LIFECYCLE_HOOK_EVENTS);
-  console.log(JSON.stringify({
-    claudeConfigDir: CLAUDE_CONFIG_DIR,
-    settingsFile: CLAUDE_SETTINGS_FILE,
-    settingsFileExists: fs.existsSync(CLAUDE_SETTINGS_FILE),
-    expectedEvents: CLAUDE_LIFECYCLE_HOOK_EVENTS,
-    ...status
-  }, null, 2));
-}
-
-function printGrokHooksStatus(): void {
-  const status = getManagedGrokHookStatus();
-  console.log(JSON.stringify({
-    grokHooksDir: GROK_HOOKS_DIR,
-    hooksFile: GROK_HOOKS_FILE,
-    hooksFileExists: fs.existsSync(GROK_HOOKS_FILE),
-    expectedEvents: GROK_HOOK_EVENTS,
-    ...status
-  }, null, 2));
-}
-
 const command = process.argv[2] || '';
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(3));
+  const positionals = parsePositionals(process.argv.slice(3));
+
+  // A bare invocation on a real terminal opens the menu. Everything else —
+  // `--help`, any named command, and any non-TTY run such as CI or a pipe —
+  // falls through to the command chain below unchanged.
+  if (await runMenuCommand(command, {
+    appTitle: APP_TITLE,
+    version: VERSION,
+    subtitle: 'Local Discord Rich Presence for Codex, Claude Code, Grok, and more.',
+    isInteractive: () => Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    run: (argv: readonly string[]) => new Promise<{ code: number | null }>((resolve) => {
+      const child = spawn(process.execPath, [process.argv[1], ...argv], { stdio: 'inherit' });
+      child.on('error', (error) => {
+        logError(`Failed to run \`${argv.join(' ')}\``, error);
+        resolve({ code: 1 });
+      });
+      child.on('exit', (code) => resolve({ code }));
+    })
+  })) {
+    process.exit(process.exitCode || 0);
+  }
 
   if (runMetaCommand(command, {
     appTitle: APP_TITLE,
@@ -1034,9 +825,7 @@ async function main(): Promise<void> {
     writeSetupConfig,
     copyRuntime: copyRuntimeToInstallDir,
     installStartup,
-    installCodexHooks,
-    installClaudeHooks,
-    installGrokHooks: installManagedGrokHooks,
+    installers: hookInstallers,
     isOpencodePluginInstalled: () => fs.existsSync(OPENCODE_PLUGIN_TARGET),
     isPiExtensionInstalled: () => fs.existsSync(PI_EXTENSION_TARGET),
     compactPath: compactHomePath,
@@ -1047,24 +836,15 @@ async function main(): Promise<void> {
     process.exit(process.exitCode || 0);
   }
 
-  if (runHooksCommand(command, {
+  if (runHooksCommand(command, positionals, {
     appTitle: APP_TITLE,
     getRuntimeScriptPath: copyRuntimeToInstallDir,
-    codex: {
-      install: installCodexHooks,
-      uninstall: uninstallCodexHooks,
-      printStatus: printCodexHooksStatus
-    },
-    claude: {
-      install: installClaudeHooks,
-      uninstall: uninstallClaudeHooks,
-      printStatus: printClaudeHooksStatus
-    },
-    grok: {
-      install: installManagedGrokHooks,
-      uninstall: removeManagedGrokHooks,
-      printStatus: printGrokHooksStatus
-    }
+    installers: hookInstallers,
+    detectedInstallers: () => detectedHookInstallers(detectSetupTools({
+      executableOverrides: { codexCli: [CODEX_BIN] },
+      pathOverrides: { codexHome: CODEX_HOME }
+    }, toolProviders)),
+    findInstaller: (harness) => findHookInstaller(harness)
   })) {
     process.exit(process.exitCode || 0);
   }

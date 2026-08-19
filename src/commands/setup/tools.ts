@@ -13,9 +13,8 @@ const pc = createColors(Boolean(process.stdout?.isTTY && !process.env.NO_COLOR))
 export interface ToolSummarySource {
   detections: SetupToolDetection[];
   providers: readonly ToolProvider[];
-  claudeHooks?: SetupHookSummary | null;
-  codexHooks?: SetupHookSummary | null;
-  grokHooks?: SetupHookSummary | null;
+  /** Install results keyed by hook capability; absent means the harness was never attempted. */
+  hookResults?: Record<string, SetupHookSummary | null>;
   opencodePluginInstalled?: boolean;
   piExtensionInstalled?: boolean;
   args: Record<string, string | boolean>;
@@ -49,9 +48,7 @@ export function buildSetupToolRows(source: ToolSummarySource): SetupToolRow[] {
   const {
     detections,
     providers,
-    claudeHooks,
-    codexHooks,
-    grokHooks,
+    hookResults = {},
     opencodePluginInstalled,
     piExtensionInstalled,
     args
@@ -59,11 +56,6 @@ export function buildSetupToolRows(source: ToolSummarySource): SetupToolRow[] {
 
   const isDetected = (key: string): boolean =>
     detections.find((d) => d.key === key)?.detected ?? false;
-
-  const hookResults = new Map<string, SetupHookSummary | null>();
-  if (claudeHooks !== undefined) hookResults.set('claude', claudeHooks);
-  if (codexHooks !== undefined) hookResults.set('codex', codexHooks);
-  if (grokHooks !== undefined) hookResults.set('grok', grokHooks);
 
   const families = new Set<string>();
   for (const provider of providers) {
@@ -87,11 +79,11 @@ export function buildSetupToolRows(source: ToolSummarySource): SetupToolRow[] {
 
     let integration = pc.dim('· None required');
 
-    const hasHooks = familyProviders.some((p) => p.hooks && p.hooks.length > 0);
-    if (hasHooks) {
-      const hookResult = hookResults.get(family);
-      const disabled = Boolean(args[`no-${family}-hooks`] || args[`no_${family}_hooks`]);
-      const detected = detectedHookCapabilityForSetup(detections, providers, family);
+    const capability = familyProviders.find((p) => p.hooks?.length)?.hooks?.[0];
+    if (capability) {
+      const hookResult = hookResults[capability];
+      const disabled = Boolean(args[`no-${capability}-hooks`] || args[`no_${capability}_hooks`]);
+      const detected = detectedHookCapabilityForSetup(detections, providers, capability);
       integration = getHookText(hookResult, disabled, detected);
     } else if (family === 'opencode') {
       integration = opencodePluginInstalled ? pc.green('✔ Plugin active') : pc.dim('· Plugin optional');

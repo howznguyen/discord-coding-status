@@ -295,6 +295,30 @@ export class ClaudeSessionModelTracker {
   }
 }
 
+/**
+ * Writes settings through a temp file + rename so a crash mid-write cannot leave
+ * Claude with a truncated settings.json, keeping a `.bak` of the previous file.
+ */
+export function writeClaudeSettings(settingsFile: string, settings: JsonRecord): void {
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+
+  if (fs.existsSync(settingsFile)) {
+    fs.copyFileSync(settingsFile, `${settingsFile}.bak`);
+  }
+
+  const tempFile = `${settingsFile}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempFile, settingsFile);
+  } finally {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch (_) {
+      // The successful rename already removed the temporary pathname.
+    }
+  }
+}
+
 export function isManagedClaudeHook(hook: unknown, marker?: string): boolean {
   const record = asRecord(hook);
   const command = typeof record?.command === 'string' ? record.command : '';

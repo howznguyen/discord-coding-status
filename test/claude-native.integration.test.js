@@ -346,19 +346,19 @@ test('Claude hook CLI lifecycle preserves unrelated settings and removes only ma
     CLAUDE_CONFIG_DIR: claudeConfigDir
   };
 
-  await runCli(['setup-claude-hooks'], env, 30000);
+  await runCli(['hooks', 'setup', 'claude'], env, 30000);
   const installedSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.deepEqual(installedSettings.permissions, { allow: ['Read'] });
   assert.equal(installedSettings.hooks.PreToolUse[0].hooks[0].command, 'node keep-me.js');
   assert.equal(JSON.stringify(installedSettings).match(/--managed-by=discord-coding-status/g).length, 9);
 
-  const statusResult = await runCli(['claude-hooks-status'], env);
-  const status = JSON.parse(statusResult.stdout);
+  const statusResult = await runCli(['hooks', 'status', 'claude'], env);
+  const status = JSON.parse(statusResult.stdout).harnesses.claude;
   assert.equal(status.installed, true);
   assert.equal(status.managedCount, 9);
   assert.deepEqual(status.missingEvents, []);
 
-  await runCli(['uninstall-claude-hooks'], env);
+  await runCli(['hooks', 'uninstall', 'claude'], env);
   const uninstalledSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.deepEqual(uninstalledSettings.permissions, { allow: ['Read'] });
   assert.equal(uninstalledSettings.hooks.PreToolUse[0].hooks[0].command, 'node keep-me.js');

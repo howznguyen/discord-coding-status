@@ -19,6 +19,7 @@ const {
   getManagedGrokHookStatus,
   installManagedGrokHooks,
   removeManagedGrokHooks,
+  grokHookCommand,
   grokHookSessionFromArgs,
   statusFromGrokHookEvent
 } = require('../dist/grok-hooks');
@@ -30,6 +31,31 @@ const {
   startDaemon,
   waitFor
 } = require('./helpers');
+
+function withPlatform(platform, run) {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, 'platform', original);
+  }
+}
+
+test('grok hook commands stay parseable in the shell each platform uses', () => {
+  // Grok has no per-platform `commandWindows` field, so `command` itself has to
+  // be valid PowerShell on Windows and valid POSIX sh everywhere else.
+  const windowsCommand = withPlatform('win32', () => grokHookCommand('C:\\app\\cli.js', 'PostToolUse'));
+  assert.ok(windowsCommand.startsWith("& '"), 'windows command starts with the call operator');
+  assert.ok(windowsCommand.includes("'C:\\app\\cli.js'"), 'script path is single-quoted');
+  assert.ok(windowsCommand.includes("'--event' 'PostToolUse'"), 'event is passed as separate literals');
+  assert.ok(windowsCommand.includes(GROK_MANAGED_HOOK_MARKER), 'owner marker survives quoting');
+  assert.equal(windowsCommand.includes('\\"'), false, 'no cmd.exe-style escaping');
+
+  const posixCommand = withPlatform('linux', () => grokHookCommand('/app/cli.js', 'PostToolUse'));
+  assert.equal(posixCommand.startsWith('&'), false, 'posix command is not a powershell call');
+  assert.ok(posixCommand.includes("'/app/cli.js' grok-hook --event PostToolUse"), posixCommand);
+});
 
 test('grok hook install writes one group per event with a grok-hook command', (t) => {
   t.after(() => fs.rmSync(GROK_HOOKS_DIR, { recursive: true, force: true }));
@@ -48,8 +74,16 @@ test('grok hook install writes one group per event with a grok-hook command', (t
     const hook = groups[0].hooks[0];
     assert.equal(hook.type, 'command');
     assert.match(hook.command, /grok-hook/);
-    assert.ok(hook.command.includes(`--event ${eventName}`), `command references ${eventName}`);
+    assert.ok(hook.command.includes(eventName), `command references ${eventName}`);
     assert.ok(hook.command.includes(GROK_MANAGED_HOOK_MARKER), 'command carries the owner marker');
+
+    if (process.platform === 'win32') {
+      // Grok runs hooks through PowerShell on Windows, which reports a
+      // ParserError unless the call operator invokes the quoted interpreter.
+      assert.ok(hook.command.startsWith("& '"), 'windows command uses the call operator');
+    } else {
+      assert.ok(hook.command.includes(`--event ${eventName}`), `command passes --event ${eventName}`);
+    }
     assert.equal(hook.timeout, 5);
   }
 

@@ -19,7 +19,15 @@ export interface ProcessInfo {
   cpuMs?: number;
 }
 
+/**
+ * Where the evidence for an active session came from. Hook reports are
+ * authoritative: they carry the real session id, model, and activity, whereas
+ * process detection can only observe that a binary is running.
+ */
+export type ToolSource = 'hook' | 'process';
+
 export interface ActiveTool extends ToolDefinition {
+  source?: ToolSource;
   providerId?: string;
   processInfo?: ProcessInfo;
   cwd?: string | null;

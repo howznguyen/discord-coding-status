@@ -119,12 +119,12 @@ test('OpenCode CLI processes are detected without capturing other tools', () => 
   const binary = '/opt/homebrew/bin/opencode';
   const windowsBinary = 'C:\\Tools\\opencode.exe';
   const tui = {
-    line: '/usr/local/bin/opencode serve',
+    line: '/usr/local/bin/opencode /Users/me/projects/server',
     executablePath: '/usr/local/bin/opencode',
-    commandLine: 'opencode serve'
+    commandLine: 'opencode /Users/me/projects/server'
   };
 
-  for (const process of [binary, windowsBinary, tui]) {
+  for (const process of [binary, windowsBinary, tui, 'opencode run "fix the bug"', 'opencode web']) {
     assert.equal(isOpencodeProcess(process), true);
   }
 
@@ -137,6 +137,24 @@ test('OpenCode CLI processes are detected without capturing other tools', () => 
   ]) {
     assert.equal(isOpencodeProcess(unrelated), false);
   }
+});
+
+test('OpenCode headless servers are not misclassified as coding sessions', () => {
+  // `opencode serve` runs for hours as a background server. Counting it as an
+  // active session made it outrank the real hook-reported session, so Discord
+  // showed OpenCode while the user was working in Claude Code.
+  for (const headless of [
+    'opencode         opencode serve --hostname 127.0.0.1 --port 4096 --cors *',
+    '/usr/local/bin/opencode serve',
+    'opencode acp',
+    'C:\\Tools\\opencode.exe serve --port 4096'
+  ]) {
+    assert.equal(isOpencodeProcess(headless), false, `${headless} is a background server`);
+  }
+
+  // A project directory that merely looks like a subcommand stays interactive.
+  assert.equal(isOpencodeProcess('opencode /Users/me/serve'), true);
+  assert.equal(isOpencodeProcess('opencode /Users/me/acp'), true);
 });
 
 test('Pi CLI processes are detected without capturing unrelated `pi` tokens', () => {

@@ -133,9 +133,9 @@ Review and trust the six Discord Coding Status command hooks. This approval is r
 
 ```sh
 npx discord-coding-status status
-npx discord-coding-status codex-hooks-status
-npx discord-coding-status claude-hooks-status
-npx discord-coding-status grok-hooks-status
+npx discord-coding-status hooks status codex
+npx discord-coding-status hooks status claude
+npx discord-coding-status hooks status grok
 npx discord-coding-status quota --source oauth
 npx discord-coding-status quota --tool claude
 npx discord-coding-status quota --tool grok
@@ -353,9 +353,9 @@ Quota is fail-closed: Anthropic API-key mode (including `apiKeyHelper`), `ANTHRO
 Install, inspect, or remove only the hooks managed by this project:
 
 ```sh
-npx discord-coding-status setup-codex-hooks
-npx discord-coding-status codex-hooks-status
-npx discord-coding-status uninstall-codex-hooks
+npx discord-coding-status hooks setup codex
+npx discord-coding-status hooks status codex
+npx discord-coding-status hooks uninstall codex
 ```
 
 The installer merges hooks into `~/.codex/hooks.json` for:
@@ -376,10 +376,9 @@ Existing hook configuration is preserved, and the previous file is backed up as 
 Install, inspect, disable, or remove only the hooks managed by this project:
 
 ```sh
-npx discord-coding-status setup-claude-hooks
-npx discord-coding-status claude-hooks-status
-npx discord-coding-status disable-claude-hooks
-npx discord-coding-status uninstall-claude-hooks
+npx discord-coding-status hooks setup claude
+npx discord-coding-status hooks status claude
+npx discord-coding-status hooks uninstall claude
 ```
 
 The installer merges nine lifecycle events into `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`). Each owned command contains `--managed-by=discord-coding-status`; status and uninstall use that marker, preserving unrelated settings, hook groups, and commands. The previous settings file is backed up as `settings.json.bak` before a write.
@@ -389,10 +388,9 @@ The installer merges nine lifecycle events into `$CLAUDE_CONFIG_DIR/settings.jso
 Install, inspect, disable, or remove only the hooks managed by this project:
 
 ```sh
-npx discord-coding-status setup-grok-hooks
-npx discord-coding-status grok-hooks-status
-npx discord-coding-status disable-grok-hooks
-npx discord-coding-status uninstall-grok-hooks
+npx discord-coding-status hooks setup grok
+npx discord-coding-status hooks status grok
+npx discord-coding-status hooks uninstall grok
 ```
 
 Grok hooks are written to `~/.grok/hooks/discord-coding-status.json` as passive, globally-trusted hooks that report session activity (status, tool, project) to the daemon. They never block the agent and need no manual approval.
@@ -427,6 +425,7 @@ Concurrent hook writes use a lock plus atomic file replacement so burst updates 
 | Command | Description |
 | --- | --- |
 | `setup` | Install the runtime/startup entry, start the daemon, and auto-install detected Codex, Claude, and Grok hooks. |
+| _(no command)_ | Open the interactive menu. Falls back to this help when stdin/stdout is not a terminal. |
 | `config` | Open the display TUI with a live two-line Discord preview. |
 | `config --advanced` | Edit advanced path, text, and image overrides with prompts. |
 | `config --preview` | Print the current two-line preview without opening the TUI. |
@@ -434,15 +433,9 @@ Concurrent hook writes use a lock plus atomic file replacement so burst updates 
 | `daemon` | Run the Rich Presence daemon in the foreground. |
 | `status` | Print a combined dashboard: services, installed AI tools, OAuth quotas, and live hook activities. |
 | `uninstall` | Remove the managed startup entry and installed runtime. |
-| `setup-codex-hooks` | Install the six Codex lifecycle hooks. |
-| `codex-hooks-status` | Print managed hook status as JSON. |
-| `uninstall-codex-hooks` | Remove only hooks installed by this project. |
-| `setup-claude-hooks` / `enable-claude-hooks` | Install the nine managed Claude lifecycle hooks. |
-| `claude-hooks-status` | Print managed Claude hook status as JSON. |
-| `disable-claude-hooks` / `uninstall-claude-hooks` | Remove only Claude hooks installed by this project. |
-| `setup-grok-hooks` / `install-grok-hooks` | Install the managed Grok Code lifecycle hooks. |
-| `grok-hooks-status` | Print managed Grok hook status as JSON. |
-| `disable-grok-hooks` / `uninstall-grok-hooks` | Remove only Grok hooks installed by this project. |
+| `hooks setup [harness...]` | Install lifecycle hooks. With no harness, every detected harness. |
+| `hooks uninstall [harness...]` | Remove only hooks installed by this project. |
+| `hooks status [harness...]` | Print managed hook status for each harness as JSON. |
 | `quota [--source SOURCE]` | Read and print Codex plan/quota information (backward-compatible default). |
 | `quota --tool claude` | Read and print eligible Claude subscription plan/Session/Weekly quota. |
 | `quota --tool grok` | Read and print Grok Code weekly pool / pay-as-you-go billing quota. |
@@ -506,19 +499,19 @@ Please report sensitive issues according to [SECURITY.md](./SECURITY.md).
 3. For Codex, confirm all six hooks are installed:
 
    ```sh
-   npx discord-coding-status codex-hooks-status
+   npx discord-coding-status hooks status codex
    ```
 
    For Claude Code, confirm all nine managed hooks are installed:
 
    ```sh
-   npx discord-coding-status claude-hooks-status
+   npx discord-coding-status hooks status claude
    ```
 
    For Grok Code, confirm all managed hooks are installed:
 
    ```sh
-   npx discord-coding-status grok-hooks-status
+   npx discord-coding-status hooks status grok
    ```
 
 4. Open Codex, run `/hooks`, and trust the Discord Coding Status hooks.
@@ -581,9 +574,9 @@ Windows logs are written under:
 Remove managed hooks before deleting the installed runtime they reference:
 
 ```sh
-npx discord-coding-status uninstall-codex-hooks
-npx discord-coding-status uninstall-claude-hooks
-npx discord-coding-status uninstall-grok-hooks
+npx discord-coding-status hooks uninstall codex
+npx discord-coding-status hooks uninstall claude
+npx discord-coding-status hooks uninstall grok
 npx discord-coding-status uninstall --purge
 ```
 

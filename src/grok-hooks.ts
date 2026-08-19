@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { shellQuoteArg } from './env';
+import { powershellCommandLine, shellQuoteArg } from './env';
 import { envPathValue, resolveHomePath } from './commands/config/settings';
 import { getArgString } from './commands/args';
 import { findStringDeep, readHookInput } from './state-store';
@@ -57,7 +57,27 @@ function asRecord(value: unknown): JsonRecord | null {
   return value as JsonRecord;
 }
 
+function grokHookArgv(scriptPath: string, event: string): string[] {
+  return [
+    process.execPath,
+    scriptPath,
+    'grok-hook',
+    '--event',
+    event,
+    GROK_MANAGED_HOOK_MARKER
+  ];
+}
+
+// Grok dispatches command hooks through the host's default shell, which is
+// PowerShell on Windows. PowerShell reads a leading quoted token as a string
+// expression and reports a ParserError before running anything, so the call
+// operator has to invoke the quoted interpreter path. Grok has no per-platform
+// `commandWindows` field, so the platform-correct form goes into `command`.
 export function grokHookCommand(scriptPath: string, event: string): string {
+  if (process.platform === 'win32') {
+    return powershellCommandLine(grokHookArgv(scriptPath, event));
+  }
+
   return [
     shellQuoteArg(process.execPath),
     shellQuoteArg(scriptPath),

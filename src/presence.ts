@@ -386,7 +386,7 @@ export function detectStateTools(): ActiveTool[] {
       continue;
     }
 
-    tools.push({ ...tool, sessionCount: sessionCounts.get(key) || null });
+    tools.push({ ...tool, source: 'hook', sessionCount: sessionCounts.get(key) || null });
     seenFamilies.add(key);
   }
 
@@ -695,12 +695,31 @@ async function updateActivityForClient(clientId: string, tool: ActiveTool): Prom
   log(`Updated ${labelForClientId(clientId)} activity: ${tool.details} / ${tool.state}.`);
 }
 
+function sourceRank(tool: ActiveTool): number {
+  return tool.source === 'hook' ? 1 : 0;
+}
+
+/**
+ * Picks the one session Discord will show.
+ *
+ * Hook reports win over process detection regardless of timestamps. Process
+ * tools are re-stamped with `Date.now()` on every poll, so comparing the two by
+ * time alone let any long-lived background process (an `opencode serve`, a
+ * codex CLI idling in a tab) permanently outrank the session the user is
+ * actually typing in. Stale hook sessions cannot block forever: they are pruned
+ * from the state file after `STATE_MAX_AGE_MS`.
+ */
 export function selectNewestTool(tools: ActiveTool[]): ActiveTool | null {
   if (!tools.length) {
     return null;
   }
 
   return [...tools].sort((left, right) => {
+    const sourceDelta = sourceRank(right) - sourceRank(left);
+    if (sourceDelta !== 0) {
+      return sourceDelta;
+    }
+
     const leftTime = coerceStateTimestamp(left.updatedAt) || 0;
     const rightTime = coerceStateTimestamp(right.updatedAt) || 0;
     return rightTime - leftTime;

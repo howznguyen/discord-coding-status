@@ -49,13 +49,42 @@ Available setup probes:
 
 Omit capabilities the tool does not support. For example, a desktop app without lifecycle hooks should not declare `hooks`.
 
-The `hooks` list participates in setup eligibility and capability lookup. A tool with a new hook protocol still needs its tool-specific hook adapter/installer; the provider prevents that adapter from being hardcoded into process detection, installation discovery, or Discord routing.
+The `hooks` list participates in setup eligibility and capability lookup. It is the
+*declaration* half of hook support — see step 3 for the installer that implements it.
 
 ## 2. Register it
 
 Import the provider in `src/providers/registry.ts` and append it to `builtInProviders`. Registry validation rejects duplicate provider IDs, duplicate presence keys, process providers without presence metadata, and conflicting Discord application definitions.
 
-## 3. Configure Discord
+## 3. Add a hook installer (only if the tool declares `hooks`)
+
+Each hook capability needs one `HookInstaller` supplying `install`, `uninstall`, and
+`status`. Put the harness-specific logic in a top-level module — `src/codex-hooks.ts`,
+`src/claude-hooks.ts`, and `src/grok-hooks.ts` are the existing examples — then register the
+installer in `src/hook-installers.ts`:
+
+```ts
+export const openCodeHookInstaller: HookInstaller = {
+  capability: 'opencode',
+  label: 'OpenCode',
+  events: OPENCODE_HOOK_EVENTS,
+  install: (scriptPath) => ({ target: HOOKS_FILE, installed, removed }),
+  uninstall: () => ({ target: HOOKS_FILE, removed }),
+  status: () => ({ target: HOOKS_FILE, targetExists, installed, managedCount, ... }),
+  notes: ['Anything the user must do once by hand.']
+};
+```
+
+Installers deliberately live outside `src/providers/`: the layering test in
+`test/architecture.integration.test.js` keeps that directory declarative by forbidding imports
+of app modules such as `env` and `state-store`, which every installer needs for its config
+paths. `validateHookInstallers` then rejects an installer whose capability no provider
+declares, so the two halves cannot drift apart.
+
+Once registered, `hooks setup`, `hooks uninstall`, `hooks status`, and the hook rows in
+`setup` and `status` pick the harness up with no CLI changes.
+
+## 4. Configure Discord
 
 When environment names are omitted, the registry derives them from `discord.application`:
 
@@ -66,14 +95,14 @@ DISCORD_CODING_STATUS_OPENCODE_IMAGE_KEY
 
 Providers may supply `defaultClientId`, `clientIdEnvironment`, and `imageKeyEnvironment` when custom names or defaults are required.
 
-## 4. Test the contract
+## 5. Test the contract
 
 Add provider tests covering:
 
 - matching and rejecting representative process lines;
 - installation discovery for supported operating systems;
 - surface priority when CLI and desktop are both running;
-- hook capability eligibility;
+- hook capability eligibility, and installer round-trip if the tool declares `hooks`;
 - Discord application resolution.
 
 `test/provider-registry.integration.test.js` contains a fake OpenCode provider demonstrating that a standard provider can participate in process detection, setup, hook policy, and Discord resolution without modifying core or platform adapters.

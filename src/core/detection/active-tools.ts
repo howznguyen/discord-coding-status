@@ -180,11 +180,14 @@ export function detectActiveTools(
 
       return {
         ...selected.provider.presence!,
+        source: 'process',
         providerId: selected.provider.id,
         processInfo: selected.processInfo,
         // Process-detected tools have no hook timestamps; stamp them with the
-        // detection time so the daemon's newest-session selection treats an
-        // actively working process as newer than an idle waiting session.
+        // detection time so the newest-session selection orders two process
+        // tools sensibly. This timestamp is re-stamped every poll, so it must
+        // never be compared against a hook timestamp — `selectNewestTool`
+        // ranks by source first for exactly that reason.
         updatedAt: now
       };
     });

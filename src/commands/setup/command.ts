@@ -2,12 +2,9 @@
 
 import { createColors } from 'picocolors';
 import type { SetupToolDetection } from '../../core/detection/types';
-import type { ToolProvider } from '../../core/providers/types';
-import {
-  shouldInstallClaudeHooks,
-  shouldInstallCodexHooks,
-  shouldInstallGrokHooks
-} from './policy';
+import type { HookInstaller, ToolProvider } from '../../core/providers/types';
+import type { SetupHookSummary } from './types';
+import { shouldInstallHooksFor } from './policy';
 import { renderSetupSummary } from './summary';
 import { buildSetupToolRows } from './tools';
 
@@ -32,9 +29,7 @@ export interface SetupCommandContext {
   writeSetupConfig: (args: Record<string, string | boolean>) => void;
   copyRuntime: () => string;
   installStartup: (scriptPath: string, startNow: boolean) => string;
-  installCodexHooks: (scriptPath: string) => { installed: number; hooksFile: string };
-  installClaudeHooks: (scriptPath: string) => { installed: number; settingsFile: string };
-  installGrokHooks: (scriptPath: string) => { installed: number; hooksFile: string };
+  installers: readonly HookInstaller[];
   isOpencodePluginInstalled: () => boolean;
   isPiExtensionInstalled: () => boolean;
   compactPath: (value: string) => string;
@@ -65,9 +60,9 @@ export async function runSetupCommand(
 
   const dryRun = Boolean(args['dry-run'] || args.dry_run);
   const startNow = !Boolean(args['no-start'] || args.no_start);
-  const installCodexHookSet = shouldInstallCodexHooks(args, detections, context.providers);
-  const installClaudeHookSet = shouldInstallClaudeHooks(args, detections, context.providers);
-  const installGrokHookSet = shouldInstallGrokHooks(args, detections, context.providers);
+  const selectedInstallers = context.installers.filter((installer) =>
+    shouldInstallHooksFor(installer.capability, args, detections, context.providers));
+  const selectedCapabilities = new Set(selectedInstallers.map((installer) => installer.capability));
 
   if (dryRun) {
     console.log(JSON.stringify({
@@ -81,24 +76,16 @@ export async function runSetupCommand(
       piClientId: context.piClientId,
       grokClientId: context.grokClientId,
       detectedTools: detections,
-      codexHooks: {
-        install: installCodexHookSet,
-        mode: (args['codex-hooks'] || args.codex_hooks)
-          ? 'forced'
-          : ((args['no-codex-hooks'] || args.no_codex_hooks) ? 'disabled' : 'auto')
-      },
-      claudeHooks: {
-        install: installClaudeHookSet,
-        mode: (args['claude-hooks'] || args.claude_hooks)
-          ? 'forced'
-          : ((args['no-claude-hooks'] || args.no_claude_hooks) ? 'disabled' : 'auto')
-      },
-      grokHooks: {
-        install: installGrokHookSet,
-        mode: (args['grok-hooks'] || args.grok_hooks)
-          ? 'forced'
-          : ((args['no-grok-hooks'] || args.no_grok_hooks) ? 'disabled' : 'auto')
-      },
+      hooks: Object.fromEntries(context.installers.map((installer) => {
+        const capability = installer.capability;
+        const forced = Boolean(args[`${capability}-hooks`] || args[`${capability}_hooks`]);
+        const disabled = Boolean(args[`no-${capability}-hooks`] || args[`no_${capability}_hooks`]);
+        return [capability, {
+          label: installer.label,
+          install: selectedCapabilities.has(capability),
+          mode: forced ? 'forced' : (disabled ? 'disabled' : 'auto')
+        }];
+      })),
       startup: context.defaultStartupPath
     }, null, 2));
     return true;
@@ -107,25 +94,35 @@ export async function runSetupCommand(
   context.writeSetupConfig(args);
   const scriptPath = context.copyRuntime();
   const startupTarget = context.installStartup(scriptPath, startNow);
-  const codexHooks = installCodexHookSet ? context.installCodexHooks(scriptPath) : null;
-  const claudeHooks = installClaudeHookSet ? context.installClaudeHooks(scriptPath) : null;
-  const grokHooks = installGrokHookSet ? context.installGrokHooks(scriptPath) : null;
+  const hookResults: Record<string, SetupHookSummary | null> = {};
+  const hookNotes = new Set<string>();
+  for (const installer of context.installers) {
+    if (!selectedCapabilities.has(installer.capability)) {
+      hookResults[installer.capability] = null;
+      continue;
+    }
+
+    const result = installer.install(scriptPath);
+    hookResults[installer.capability] = {
+      installed: result.installed,
+      removed: result.removed,
+      file: result.target
+    };
+    for (const note of installer.notes ?? []) {
+      hookNotes.add(note);
+    }
+  }
 
   const tools = buildSetupToolRows({
     detections,
     providers: context.providers,
-    claudeHooks,
-    codexHooks,
-    grokHooks,
+    hookResults,
     opencodePluginInstalled: context.isOpencodePluginInstalled(),
     piExtensionInstalled: context.isPiExtensionInstalled(),
     args
   });
 
-  const notes: string[] = [];
-  if (codexHooks) {
-    notes.push('Codex: run `/hooks` once in Codex to review and trust new hooks.');
-  }
+  const notes: string[] = [...hookNotes];
   if (!startNow) {
     notes.push('Startup is installed; the daemon will run at next login.');
   }
