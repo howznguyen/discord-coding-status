@@ -9,6 +9,7 @@ export interface QuotaCommandContext {
   getCodexQuota: (source?: string) => Promise<string | null>;
   getGrokQuota: () => Promise<string | null>;
   getOpencodeQuota: () => Promise<string | null>;
+  getCursorQuota: () => Promise<string | null>;
   defaultCodexSource: string;
 }
 
@@ -37,10 +38,10 @@ export async function runQuotaCommand(
     return true;
   }
 
-  if (requestedTool === 'grok' || requestedTool === 'opencode') {
+  if (requestedTool === 'grok' || requestedTool === 'opencode' || requestedTool === 'cursor') {
     const quotaText = requestedTool === 'grok'
       ? await context.getGrokQuota()
-      : await context.getOpencodeQuota();
+      : (requestedTool === 'cursor' ? await context.getCursorQuota() : await context.getOpencodeQuota());
 
     if (!quotaText) {
       console.error(pc.red(`${requestedTool} quota unavailable. Ensure you are logged in and try again.`));
@@ -53,7 +54,7 @@ export async function runQuotaCommand(
   }
 
   if (requestedTool !== 'codex') {
-    console.error(pc.red(`Unsupported quota tool: ${requestedTool}. Use codex, claude, grok, or opencode.`));
+    console.error(pc.red(`Unsupported quota tool: ${requestedTool}. Use codex, claude, grok, cursor, or opencode.`));
     process.exitCode = 1;
     return true;
   }

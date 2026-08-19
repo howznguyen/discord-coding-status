@@ -87,6 +87,22 @@ export function toolFamilyForTool(tool: ActiveTool | null | undefined): ToolFami
     return 'codex';
   }
 
+  if (text.includes('grok')) {
+    return 'grok';
+  }
+
+  if (text.includes('opencode')) {
+    return 'opencode';
+  }
+
+  if (text.includes('cursor')) {
+    return 'cursor';
+  }
+
+  if (text.includes('pi')) {
+    return 'pi';
+  }
+
   return 'other';
 }
 
@@ -1395,6 +1411,8 @@ async function refreshUsageText(tool: ActiveTool | undefined, cacheKey: string):
     text = await getNativeOpencodeQuotaText(tool);
   } else if (toolFamily === 'grok') {
     text = await getNativeGrokQuotaText(tool);
+  } else if (toolFamily === 'cursor') {
+    text = await getNativeCursorQuotaText(tool);
   }
 
   if (!text && toolFamily !== 'claude' && PLAN_TEXT_OVERRIDE) {
@@ -1433,12 +1451,18 @@ export interface HarnessQuotaStatus {
   text: string;
 }
 
+export async function getNativeCursorQuotaText(tool?: ActiveTool): Promise<string | null> {
+  const { fetchCursorQuotaText } = await import('./providers/cursor/quota');
+  return fetchCursorQuotaText();
+}
+
 export async function fetchAllHarnessQuotas(): Promise<HarnessQuotaStatus[]> {
-  const [claudeRes, codexRes, grokRes, opencodeRes] = await Promise.allSettled([
+  const [claudeRes, codexRes, grokRes, opencodeRes, cursorRes] = await Promise.allSettled([
     claudeQuotaEngine.getQuota(claudeQuotaRequestOptions()),
     getNativeCodexQuotaText(undefined, 'auto'),
     getNativeGrokQuotaText(undefined),
-    getNativeOpencodeQuotaText(undefined)
+    getNativeOpencodeQuotaText(undefined),
+    getNativeCursorQuotaText(undefined)
   ]);
 
   const isClaudeOk = claudeRes.status === 'fulfilled' && claudeRes.value.status !== 'unavailable';
@@ -1455,6 +1479,9 @@ export async function fetchAllHarnessQuotas(): Promise<HarnessQuotaStatus[]> {
   const isOpencodeOk = opencodeRes.status === 'fulfilled' && Boolean(opencodeRes.value);
   const opencodeText = isOpencodeOk ? opencodeRes.value! : 'Not signed in';
 
+  const isCursorOk = cursorRes.status === 'fulfilled' && Boolean(cursorRes.value);
+  const cursorText = isCursorOk ? cursorRes.value! : 'Not signed in';
+
   return [
     {
       tool: 'Claude Code',
@@ -1470,6 +1497,11 @@ export async function fetchAllHarnessQuotas(): Promise<HarnessQuotaStatus[]> {
       tool: 'Grok',
       status: isGrokOk ? 'active' : 'unavailable',
       text: grokText
+    },
+    {
+      tool: 'Cursor',
+      status: isCursorOk ? 'active' : 'unavailable',
+      text: cursorText
     },
     {
       tool: 'OpenCode',

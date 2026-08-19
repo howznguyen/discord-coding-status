@@ -16,6 +16,7 @@ export interface MetaCommandContext {
   opencodeClientId: string;
   piClientId: string;
   grokClientId: string;
+  cursorClientId: string;
   configFile: string;
   stateFile: string;
 }
@@ -55,6 +56,7 @@ ${pc.bold('Usage:')}
   discord-coding-status quota --tool claude
   discord-coding-status quota --tool grok
   discord-coding-status quota --tool opencode
+  discord-coding-status quota --tool cursor
   discord-coding-status --version
 
 ${pc.bold('Default Discord Application IDs:')}
@@ -63,6 +65,7 @@ ${pc.bold('Default Discord Application IDs:')}
   OpenCode: ${accent(context.opencodeClientId)}
   Pi: ${accent(context.piClientId)}
   Grok: ${accent(context.grokClientId)}
+  Cursor: ${accent(context.cursorClientId)}
 
 ${pc.bold('Config file:')}
   ${accent(context.configFile)}

@@ -71,7 +71,7 @@ function validateEnvironment(): void {
 
   for (const [name, value] of ids) {
     if (!value) {
-      if (name === 'DISCORD_CLIENT_ID') {
+      if (name === 'DISCORD_CLIENT_ID' || name.endsWith('CURSOR_CLIENT_ID')) {
         continue;
       }
 

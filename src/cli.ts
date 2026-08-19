@@ -105,6 +105,7 @@ import {
   OPENCODE_CLIENT_ID,
   PI_CLIENT_ID,
   GROK_CLIENT_ID,
+  CURSOR_CLIENT_ID,
   DETAIL_LEVEL,
   CODEX_QUOTA_SOURCE,
   CODEX_BIN,
@@ -146,6 +147,7 @@ import {
   claudeQuotaEngine,
   fetchAllHarnessQuotas,
   getNativeCodexQuotaText,
+  getNativeCursorQuotaText,
   getNativeGrokQuotaText,
   getNativeOpencodeQuotaText
 } from './quota';
@@ -989,6 +991,7 @@ async function main(): Promise<void> {
     opencodeClientId: OPENCODE_CLIENT_ID,
     piClientId: PI_CLIENT_ID,
     grokClientId: GROK_CLIENT_ID,
+    cursorClientId: CURSOR_CLIENT_ID,
     configFile: CONFIG_FILE,
     stateFile: STATE_FILE
   })) {
@@ -1095,6 +1098,7 @@ async function main(): Promise<void> {
     },
     getGrokQuota: () => getNativeGrokQuotaText(requireToolPresence('grokCli')),
     getOpencodeQuota: () => getNativeOpencodeQuotaText(requireToolPresence('opencodeCli')),
+    getCursorQuota: () => getNativeCursorQuotaText(requireToolPresence('cursorCli')),
     defaultCodexSource: CODEX_QUOTA_SOURCE
   })) {
     process.exit(process.exitCode || 0);

@@ -70,6 +70,7 @@ export const CLAUDE_CLIENT_ID = DISCORD_APPLICATIONS.get('claude')?.clientId || 
 export const OPENCODE_CLIENT_ID = DISCORD_APPLICATIONS.get('opencode')?.clientId || '';
 export const PI_CLIENT_ID = DISCORD_APPLICATIONS.get('pi')?.clientId || '';
 export const GROK_CLIENT_ID = DISCORD_APPLICATIONS.get('grok')?.clientId || '';
+export const CURSOR_CLIENT_ID = DISCORD_APPLICATIONS.get('cursor')?.clientId || '';
 export const FALLBACK_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || '').trim();
 export const LARGE_IMAGE_KEY = (process.env.DISCORD_LARGE_IMAGE_KEY || '').trim();
 export const SMALL_IMAGE_KEY = (process.env.DISCORD_SMALL_IMAGE_KEY || '').trim();

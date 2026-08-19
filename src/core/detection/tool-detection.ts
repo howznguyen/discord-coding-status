@@ -177,3 +177,16 @@ export function isGrokProcess(value: ProcessDescriptor | string): boolean {
     || executable === 'grok.exe'
     || /(?:^|[\s/])(?:bun|bunx|node|npx|npm|pnpm|yarn)\s+.*(?:@[\w.-]+\/)?grok(?:[/.][^\s]*)?(?:\s|$)/.test(text);
 }
+
+export function isCursorProcess(value: ProcessDescriptor | string): boolean {
+  const text = normalizedProcessText(value).replace(/\\/g, '/');
+  const executable = executableBasename(value);
+
+  if (executable === 'cursor' || executable === 'cursor.exe') {
+    return true;
+  }
+
+  return text.includes('/cursor.app/')
+    || text.includes('cursor')
+      && /(?:^|[\s/])(?:cursor)(?:[/.][^\s]*)?(?:\s|$)/.test(text);
+}

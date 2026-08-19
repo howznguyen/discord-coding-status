@@ -251,6 +251,8 @@ function joinMetricParts(parts: Array<string | null | undefined>): string {
   return truncatePresenceText(parts.filter(Boolean).join(' • '));
 }
 
+export { joinMetricParts };
+
 function formatDollar(value: number | null | undefined): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
@@ -476,6 +478,8 @@ function formatRichStateText(parts: RichStateParts): string | null {
   return text || null;
 }
 
+export { formatRichStateText };
+
 function richStateFromCodexSnapshot(snapshot: CodexQuotaSnapshot, tool?: ActiveTool): RichStateParts {
   const windowTexts = [snapshot.primary, snapshot.secondary]
     .filter((window): window is CodexQuotaWindow => window !== null)
@@ -594,7 +598,6 @@ export {
   formatContextText,
   sanitizeBranchName,
   joinPresenceParts,
-  joinMetricParts,
   formatDollar,
   formatTokenCount,
   capitalizeWord,
@@ -607,7 +610,6 @@ export {
   formatCodexPlanText,
   formatCodexMultiplierText,
   formatCodexCredits,
-  formatRichStateText,
   richStateFromCodexSnapshot,
   richStateFromRecord,
   parseRichStateCommandOutput

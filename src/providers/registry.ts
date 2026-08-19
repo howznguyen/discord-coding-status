@@ -7,13 +7,15 @@ import { codexProviders, DEFAULT_CODEX_CLIENT_ID } from './codex/provider';
 import { opencodeProviders, DEFAULT_OPENCODE_CLIENT_ID } from './opencode/provider';
 import { piProviders, DEFAULT_PI_CLIENT_ID } from './pi/provider';
 import { grokProviders, DEFAULT_GROK_CLIENT_ID } from './grok/provider';
+import { cursorProviders, DEFAULT_CURSOR_CLIENT_ID } from './cursor/provider';
 
 export {
   DEFAULT_CLAUDE_CLIENT_ID,
   DEFAULT_CODEX_CLIENT_ID,
   DEFAULT_OPENCODE_CLIENT_ID,
   DEFAULT_PI_CLIENT_ID,
-  DEFAULT_GROK_CLIENT_ID
+  DEFAULT_GROK_CLIENT_ID,
+  DEFAULT_CURSOR_CLIENT_ID
 };
 
 export function validateToolProviders(providers: readonly ToolProvider[]): void {
@@ -63,7 +65,8 @@ const builtInProviders: readonly ToolProvider[] = [
   ...codexProviders,
   ...opencodeProviders,
   ...piProviders,
-  ...grokProviders
+  ...grokProviders,
+  ...cursorProviders
 ];
 validateToolProviders(builtInProviders);
 
