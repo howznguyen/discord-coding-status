@@ -844,7 +844,11 @@ async function main(): Promise<void> {
       executableOverrides: { codexCli: [CODEX_BIN] },
       pathOverrides: { codexHome: CODEX_HOME }
     }, toolProviders)),
-    findInstaller: (harness) => findHookInstaller(harness)
+    findInstaller: (harness) => findHookInstaller(harness),
+    restartDaemon: () => restartManagedDaemon({
+      macosLaunchAgentId: MACOS_LAUNCH_AGENT_ID,
+      windowsTaskName: WINDOWS_TASK_NAME
+    })
   })) {
     process.exit(process.exitCode || 0);
   }

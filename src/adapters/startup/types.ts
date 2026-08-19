@@ -1,6 +1,3 @@
 'use strict';
 
-export interface DaemonRefreshResult {
-  status: 'restarted' | 'not-installed' | 'unsupported' | 'failed' | 'skipped';
-  error?: string;
-}
+export type { DaemonRefreshResult } from '../../core/startup/types';

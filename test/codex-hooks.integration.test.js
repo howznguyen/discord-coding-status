@@ -19,10 +19,18 @@ const CODEX_HOOK_EVENTS = [
 ];
 
 function createCodexEnvironment(t) {
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hooks-test-'));
-  t.after(() => fs.rmSync(codexHome, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hooks-test-'));
+  const codexHome = path.join(root, 'codex');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  const { env } = createTestEnvironment(t, { CODEX_HOME: codexHome });
+  // `hooks setup` copies a runtime into the install directory and restarts the
+  // managed daemon; both resolve from the home directory, so it has to be
+  // isolated or the suite touches the developer's own installation.
+  const { env } = createTestEnvironment(t, {
+    HOME: root,
+    USERPROFILE: root,
+    CODEX_HOME: codexHome
+  });
   return { codexHome, env, hooksFile: path.join(codexHome, 'hooks.json') };
 }
 

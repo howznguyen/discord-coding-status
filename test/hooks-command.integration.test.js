@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { parsePositionals } = require('../dist/commands/args');
+const { runHooksCommand } = require('../dist/commands/hooks/command');
 const {
   detectedHookInstallers,
   findHookInstaller,
@@ -42,7 +43,12 @@ function createHarnessEnvironment(t) {
   const codexHome = path.join(root, 'codex');
   const grokHooksDir = path.join(root, 'grok');
   const claudeConfigDir = path.join(root, 'claude');
+  // `hooks setup` copies a runtime into the install directory and restarts the
+  // managed daemon, both of which hang off the home directory. Without this the
+  // suite would overwrite the developer's own install and bounce their daemon.
   const { env } = createTestEnvironment(t, {
+    HOME: root,
+    USERPROFILE: root,
     CODEX_HOME: codexHome,
     DISCORD_CODING_STATUS_GROK_HOOKS_DIR: grokHooksDir,
     CLAUDE_CONFIG_DIR: claudeConfigDir
@@ -122,6 +128,74 @@ test('positional parsing agrees with flag parsing about consumed tokens', () => 
   // `--event Stop` consumes Stop as the flag value, so it is not a positional.
   assert.deepEqual(parsePositionals(['setup', '--event', 'Stop', 'codex']), ['setup', 'codex']);
   assert.deepEqual(parsePositionals(['setup', '--json=1', 'codex']), ['setup', 'codex']);
+});
+
+function fakeInstaller(capability) {
+  return {
+    capability,
+    label: capability,
+    events: ['SessionStart'],
+    install: () => ({ target: `/tmp/${capability}`, installed: 1, removed: 0 }),
+    uninstall: () => ({ target: `/tmp/${capability}`, removed: 1 }),
+    status: () => ({
+      target: `/tmp/${capability}`,
+      targetExists: true,
+      installed: true,
+      managedCount: 1,
+      expectedEvents: ['SessionStart'],
+      missingEvents: [],
+      duplicateEvents: [],
+      unexpectedEvents: []
+    })
+  };
+}
+
+function spyContext(overrides = {}) {
+  const calls = { runtime: 0, restart: 0 };
+  const installer = fakeInstaller('codex');
+  const context = {
+    appTitle: 'Discord Coding Status',
+    installers: [installer],
+    detectedInstallers: () => [installer],
+    findInstaller: (name) => (name === 'codex' ? installer : null),
+    getRuntimeScriptPath: () => { calls.runtime += 1; return '/tmp/app/dist/cli.js'; },
+    restartDaemon: () => { calls.restart += 1; return { status: 'restarted' }; },
+    ...overrides
+  };
+  return { context, calls };
+}
+
+test('hooks setup restarts the daemon that copying the runtime stopped', (t) => {
+  const log = t.mock.method(console, 'log', () => {});
+  const { context, calls } = spyContext();
+
+  assert.equal(runHooksCommand('hooks', ['setup', 'codex'], context), true);
+  assert.equal(calls.runtime, 1, 'the runtime copy ran');
+  assert.equal(calls.restart, 1, 'and the daemon was brought back up');
+
+  const output = log.mock.calls.map((call) => String(call.arguments[0])).join('\n');
+  assert.match(output, /Daemon restarted/);
+});
+
+test('hooks uninstall and status leave the daemon alone', (t) => {
+  t.mock.method(console, 'log', () => {});
+
+  for (const action of ['uninstall', 'status']) {
+    const { context, calls } = spyContext();
+    assert.equal(runHooksCommand('hooks', [action, 'codex'], context), true);
+    assert.equal(calls.runtime, 0, `${action} must not copy the runtime`);
+    assert.equal(calls.restart, 0, `${action} must not restart the daemon`);
+  }
+});
+
+test('a daemon that is not installed is reported, not treated as a failure', (t) => {
+  const log = t.mock.method(console, 'log', () => {});
+  const { context } = spyContext({ restartDaemon: () => ({ status: 'not-installed' }) });
+
+  assert.equal(runHooksCommand('hooks', ['setup', 'codex'], context), true);
+  const output = log.mock.calls.map((call) => String(call.arguments[0])).join('\n');
+  assert.match(output, /No managed daemon is installed/);
+  assert.doesNotMatch(output, /could not be restarted/);
 });
 
 test('hooks setup installs only the named harnesses', async (t) => {

@@ -2,6 +2,7 @@
 
 import { createColors } from 'picocolors';
 import type { HookInstaller } from '../../core/providers/types';
+import type { DaemonRefreshResult } from '../../core/startup/types';
 
 const pc = createColors(Boolean(process.stdout?.isTTY && !process.env.NO_COLOR));
 
@@ -14,6 +15,11 @@ export interface HooksCommandContext {
   installers: readonly HookInstaller[];
   detectedInstallers: () => HookInstaller[];
   findInstaller: (harness: string) => HookInstaller | null;
+  /**
+   * Restarts the managed daemon. Required because `getRuntimeScriptPath` copies
+   * a fresh runtime into place, and that copy stops the running daemon first.
+   */
+  restartDaemon: () => DaemonRefreshResult;
 }
 
 function normalizeAction(value: string | undefined): HookAction | null {
@@ -84,7 +90,26 @@ function resolveInstallers(
   return resolved;
 }
 
+function reportDaemonRestart(result: DaemonRefreshResult): void {
+  if (result.status === 'restarted') {
+    console.log(pc.green('✔ Daemon restarted on the updated runtime.'));
+    return;
+  }
+
+  if (result.status === 'not-installed') {
+    console.log(pc.dim('No managed daemon is installed. Run `setup` to install and start one.'));
+    return;
+  }
+
+  if (result.status === 'failed') {
+    console.log(pc.yellow('Hooks are installed, but the daemon could not be restarted. Run `setup` to restore it.'));
+    return;
+  }
+}
+
 function runSetup(installers: readonly HookInstaller[], context: HooksCommandContext): void {
+  // Copying the runtime stops the daemon, so it has to come back up before the
+  // freshly written hooks have anything to report to.
   const scriptPath = context.getRuntimeScriptPath();
   const notes = new Set<string>();
 
@@ -104,6 +129,8 @@ function runSetup(installers: readonly HookInstaller[], context: HooksCommandCon
   for (const note of notes) {
     console.log(pc.yellow(note));
   }
+
+  reportDaemonRestart(context.restartDaemon());
 }
 
 function runUninstall(installers: readonly HookInstaller[], context: HooksCommandContext): void {
