@@ -53,6 +53,7 @@ import type { DaemonRefreshResult } from './adapters/startup/types';
 import type { ConfigPreviewSamples } from './commands/config/types';
 import type { HookSessionState } from './core/hooks/types';
 import { parseArgs, parsePositionals, getArgString } from './commands/args';
+import { resolveRuntimeInstallCommand } from './core/runtime/install-command';
 import type { SetupHookSummary } from './commands/setup/types';
 import {
   detectedHookInstallers,
@@ -265,14 +266,13 @@ function missingRuntimeDependencies(runtimeRoot: string, dependencies: string[])
 
 function installRuntimeDependencies(runtimeRoot: string): void {
   const npmExecPath = process.env.npm_execpath;
-  const useNpmExecPath = Boolean(npmExecPath && fs.existsSync(npmExecPath));
-  const npmArgs = ['install', '--omit=dev', '--no-audit', '--no-fund'];
-  const command = useNpmExecPath
-    ? process.execPath
-    : (process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'npm');
-  const args = useNpmExecPath
-    ? [npmExecPath!, ...npmArgs]
-    : (process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...npmArgs] : npmArgs);
+  const { command, args } = resolveRuntimeInstallCommand({
+    packageManagerPath: npmExecPath,
+    packageManagerPathExists: Boolean(npmExecPath && fs.existsSync(npmExecPath)),
+    platform: process.platform,
+    runtimePath: process.execPath,
+    comSpec: process.env.ComSpec
+  });
 
   try {
     execFileSync(command, args, {
