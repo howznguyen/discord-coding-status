@@ -164,10 +164,14 @@ test('quota --tool claude uses the fixed OAuth usage host and fails closed for A
   assert.equal(requestLog(requestLogFile).length, 1, 'custom Claude modes must not make an OAuth usage request');
 });
 
+// The mocked Claude quota endpoint stalls this long, so presence must not
+// block on it.
+const SLOW_QUOTA_DELAY_MS = 2000;
+
 test('native Claude hooks update raw model immediately while slow quota refresh stays in background', async (t) => {
   const { directory, env: baseEnv, rpcLogFile, stateFile } = createTestEnvironment(t);
   const { env, requestLogFile } = claudeTestEnvironment(baseEnv, directory, {
-    DISCORD_CODING_STATUS_MOCK_CLAUDE_DELAY_MS: '2000'
+    DISCORD_CODING_STATUS_MOCK_CLAUDE_DELAY_MS: String(SLOW_QUOTA_DELAY_MS)
   });
   const privatePrompt = 'private-hook-prompt-must-not-persist';
   const privateResponse = 'private-transcript-response-must-not-persist';
@@ -186,7 +190,6 @@ test('native Claude hooks update raw model immediately while slow quota refresh 
     'the daemon state watcher to start'
   );
 
-  const startedAt = Date.now();
   await runCli(
     ['claude-hook', '--event', 'UserPromptSubmit'],
     env,
@@ -200,6 +203,11 @@ test('native Claude hooks update raw model immediately while slow quota refresh 
     })
   );
 
+  // Time from the moment the hook returned, not from before it was spawned:
+  // starting a Node process swings from ~80ms idle to ~800ms under full-suite
+  // load, which would dominate the budget and make this assertion flaky. The
+  // daemon's own publish latency is what matters here, and it stays ~350ms.
+  const hookCompletedAt = Date.now();
   await waitFor(
     () => readRpcEvents(rpcLogFile).find(
       (event) => event.method === 'setActivity'
@@ -208,7 +216,10 @@ test('native Claude hooks update raw model immediately while slow quota refresh 
     'the Claude model to reach Discord before quota responds',
     1200
   );
-  assert.ok(Date.now() - startedAt < 1500, 'model activity should not wait for the slow quota response');
+  assert.ok(
+    Date.now() - hookCompletedAt < SLOW_QUOTA_DELAY_MS,
+    'model activity should not wait for the slow quota response'
+  );
 
   const enriched = await waitFor(
     () => readRpcEvents(rpcLogFile).find(
